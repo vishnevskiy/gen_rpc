@@ -35,3 +35,5 @@
         tos,
         active]).
 
+%%% Client identifier
+-type client_id() :: atom() | {term(), atom()}.

@@ -40,7 +40,7 @@
 -spec start_link({inet:ip4_address(), inet:port_number()}) -> gen_fsm:startlink_ret().
 start_link(Peer) when is_tuple(Peer) ->
     Name = gen_rpc_helper:make_process_name("acceptor", Peer),
-    gen_fsm:start_link({local,Name}, ?MODULE, {Peer}, [{spawn_opt, [{priority, high}]}]).
+    gen_fsm:start_link({local,Name}, ?MODULE, {Peer}, [{spawn_opt, [{priority, max}]}]).
 
 -spec stop(pid()) -> ok.
 stop(Pid) when is_pid(Pid) ->
