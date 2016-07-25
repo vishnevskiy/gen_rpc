@@ -43,7 +43,7 @@ start_slave(Slave, Port) ->
     SlaveStr = atom_to_list(Slave),
     [NameStr, IpStr] = string:tokens(SlaveStr, [$@]),
     Name = list_to_atom(NameStr),
-    {ok, _Slave} = slave:start(IpStr, Name, "+K true -gen_rpc tcp_server_port " ++ integer_to_list(Port)),
+    {ok, _Slave} = slave:start(IpStr, Name, "+K true -gen_rpc port " ++ integer_to_list(Port)),
     ok = rpc:call(Slave, code, add_pathsz, [code:get_path()]),
     ok = set_application_environment(Slave),
     %% Start the application remotely
@@ -99,6 +99,7 @@ make_process_name(Tag) ->
 make_process_name(Node, Tag) when is_binary(Tag) ->
     NodeBin = atom_to_binary(Node, utf8),
     binary_to_atom(<<Tag/binary, NodeBin/binary>>, utf8).
+
 spawn_long_running(TimeSpan) ->
     spawn(fun() -> timer:sleep(TimeSpan) end).
 

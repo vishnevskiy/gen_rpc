@@ -1,4 +1,4 @@
-%%% -*-mode:erlang;coding:utf-8;tab-width:4;c-basic-offset:4;indent-tabs-mode:()-*-
+%%% -*-mode:erlang;coding:utf-8;tab-width:4;c-basic-offset:4;indent-tabs-driver:()-*-
 %%% ex: set ft=erlang fenc=utf-8 sts=4 ts=4 sw=4 et:
 %%%
 %%% Copyright 2015 Panagiotis Papadomitsos. All Rights Reserved.
@@ -17,14 +17,12 @@
 
 %%% Local state
 -record(state, {socket :: port(),
-        peer :: tuple(),
+        driver :: atom(),
+        driver_mod :: atom(),
         acceptor :: prim_inet:insock()}).
 
 %%% Supervisor functions
--export([start_link/1, stop/1]).
-
-%%% Server functions
--export([get_port/1]).
+-export([start_link/0, stop/0]).
 
 %%% Behaviour callbacks
 -export([init/1, handle_call/3, handle_cast/2,
@@ -33,90 +31,73 @@
 %%% ===================================================
 %%% Supervisor functions
 %%% ===================================================
--spec start_link({inet:ip4_address(), inet:port_number()}) -> gen_sever:startlink_ret().
-start_link(Peer) when is_tuple(Peer) ->
-    Name = gen_rpc_helper:make_process_name("server", Peer),
-    gen_server:start_link({local,Name}, ?MODULE, {Peer}, [{spawn_opt, [{priority, high}]}]).
+-spec start_link() -> gen_sever:startlink_ret().
+start_link() ->
+    gen_server:start_link({local,?MODULE}, ?MODULE, {}, []).
 
--spec stop(pid()) -> ok.
-stop(Pid) when is_pid(Pid) ->
-    gen_server:stop(Pid, normal, infinity).
-
-%%% ===================================================
-%%% Server functions
-%%% ===================================================
--spec get_port(pid()) -> {ok, inet:port_number()} | {error, term()} | term(). %dialyzer complains without term().
-get_port(Pid) when is_pid(Pid) ->
-    gen_server:call(Pid, get_port).
+-spec stop() -> ok.
+stop() ->
+    gen_server:stop(?MODULE, normal, infinity).
 
 %%% ===================================================
 %%% Behaviour callbacks
 %%% ===================================================
-init({Peer}) ->
-    _OldVal = erlang:process_flag(trap_exit, true),
-    case gen_tcp:listen(0, ?DEFAULT_TCP_OPTS) of
+init({}) ->
+    ok = gen_rpc_helper:set_optimal_process_flags(),
+    {ok, Port} = application:get_env(?APP, port),
+    {Driver, DriverMod, _ClosedMsg, _ErrorMsg} = gen_rpc_helper:get_transport_driver(),
+    case DriverMod:listen(Port) of
         {ok, Socket} ->
-            ok = lager:info("event=listener_started_successfully peer=\"~s\"",
-                            [gen_rpc_helper:peer_to_string(Peer)]),
+            ok = lager:info("event=server_setup_successfully driver=~s socket=\"~p\"", [Driver, Socket]),
             {ok, Ref} = prim_inet:async_accept(Socket, -1),
-            {ok, #state{peer=Peer, socket=Socket, acceptor=Ref}};
+            {ok, #state{socket=Socket, driver=Driver, driver_mod=DriverMod, acceptor=Ref}};
         {error, Reason} ->
-            ok = lager:critical("event=failed_to_start_listener peer=\"~s\" reason=\"~p\"",
-                                [gen_rpc_helper:peer_to_string(Peer), Reason]),
+            ok = lager:error("event=failed_to_setup_server driver=~s reason=\"~p\"", [Driver, Reason]),
             {stop, Reason}
     end.
 
-%% Returns the dynamic port the current TCP server listens to
-handle_call(get_port, _From, #state{socket=Socket} = State) ->
-    {ok, Port} = inet:port(Socket),
-    ok = lager:debug("message=get_port socket=\"~p\" port=~B", [Socket,Port]),
-    {reply, {ok, Port}, State};
-
 %% Catch-all for calls - die if we get a message we don't expect
-handle_call(Msg, _From, State) ->
-    ok = lager:critical("event=unknown_call_received socket=\"~p\" message=\"~p\" action=stopping", [State#state.socket, Msg]),
+handle_call(Msg, _From,  #state{socket=Socket, driver=Driver} = State) ->
+    ok = lager:error("event=unknown_call_received driver=~s socket=\"~p\" message=\"~p\" action=stopping", [Driver, Socket, Msg]),
     {stop, {unknown_call, Msg}, {unknown_call, Msg}, State}.
 
 %% Catch-all for casts - die if we get a message we don't expect
-handle_cast(Msg, State) ->
-    ok = lager:critical("event=unknown_cast_received socket=\"~p\" message=\"~p\" action=stopping", [State#state.socket, Msg]),
+handle_cast(Msg, #state{socket=Socket, driver=Driver} = State) ->
+    ok = lager:error("event=unknown_cast_received driver=~s socket=\"~p\" message=\"~p\" action=stopping", [Driver, Socket, Msg]),
     {stop, {unknown_cast, Msg}, State}.
 
-handle_info({inet_async, ListSock, Ref, {ok, AccSocket}},
-            #state{peer=Peer, socket=ListSock, acceptor=Ref} = State) ->
+handle_info({inet_async, ListSock, Ref, {ok, AccSock}},
+            #state{socket=ListSock, driver=Driver, driver_mod=DriverMod, acceptor=Ref} = State) ->
     try
-        ok = lager:info("event=client_connection_received peer=\"~s\" socket=\"~p\" action=starting_acceptor",
-                          [gen_rpc_helper:peer_to_string(Peer), ListSock]),
-        %% Start an acceptor process. We need to provide the acceptor
-        %% process with our designated node IP and name so enforcement
-        %% of those attributes can be made for security reasons.
+        ok = lager:info("event=client_connection_received driver=~s socket=\"~p\" action=starting_acceptor", [Driver, ListSock]),
+        Peer = DriverMod:get_peer(AccSock),
         {ok, AccPid} = gen_rpc_acceptor_sup:start_child(Peer),
-        %% Link to acceptor, if they die so should we, since we are single-receiver
-        %% to single-acceptor service
-        case gen_rpc_helper:set_sock_opt(ListSock, AccSocket) of
+        case DriverMod:copy_sock_opts(ListSock, AccSock) of
             ok -> ok;
             {error, Reason} -> exit({set_sock_opt, Reason})
         end,
-        ok = gen_tcp:controlling_process(AccSocket, AccPid),
-        ok = gen_rpc_acceptor:set_socket(AccPid, AccSocket),
-        {stop, normal, State}
+        ok = DriverMod:set_controlling_process(AccSock, AccPid),
+        ok = gen_rpc_acceptor:set_socket(AccPid, AccSock),
+        case prim_inet:async_accept(ListSock, -1) of
+            {ok, NewRef} -> {noreply, State#state{acceptor=NewRef}, hibernate};
+            {error, NewRef} -> exit({async_accept, inet:format_error(NewRef)})
+        end
     catch
         exit:ExitReason ->
-            ok = lager:error("message=inet_async event=unknown_error socket=\"~p\" error=\"~p\" action=stopping",
-                            [ListSock, ExitReason]),
+            ok = lager:error("message=inet_async event=unknown_error driver=~s socket=\"~p\" error=\"~p\" action=stopping",
+                             [Driver, ListSock, ExitReason]),
             {stop, ExitReason, State}
     end;
 
 %% Handle async socket errors gracefully
-handle_info({inet_async, ListSock, Ref, Error}, #state{socket=ListSock,acceptor=Ref} = State) ->
-    ok = lager:error("message=inet_async event=listener_error socket=\"~p\" error=\"~p\" action=stopping",
-                    [ListSock, Error]),
+handle_info({inet_async, ListSock, Ref, Error}, #state{socket=ListSock, driver=Driver, acceptor=Ref} = State) ->
+    ok = lager:error("message=inet_async event=listener_error driver=~s socket=\"~p\" error=\"~p\" action=stopping", [Driver, ListSock, Error]),
     {stop, Error, State};
 
 %% Catch-all for info - our protocol is strict so die!
-handle_info(Msg, State) ->
-    ok = lager:critical("event=uknown_message_received socket=\"~p\" message=\"~p\" action=stopping", [State#state.socket, Msg]),
-    {stop, {unknown_message, Msg}, State}.
+handle_info(Msg, #state{socket=Socket, driver=Driver} = State) ->
+    ok = lager:error("event=uknown_message_received driver=~s socket=\"~p\" message=\"~p\" action=stopping", [Driver, Socket, Msg]),
+    {stop, {unknown_message,Msg}, State}.
 
 terminate(_Reason, _State) ->
     ok.

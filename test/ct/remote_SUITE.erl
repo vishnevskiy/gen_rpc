@@ -224,13 +224,12 @@ server_inactivity_timeout(_Config) ->
 random_local_tcp_close(_Config) ->
     {_Mega, _Sec, _Micro} = gen_rpc:call(?SLAVE, os, timestamp),
     ClientName = gen_rpc_helper:make_process_name("client", ?SLAVE),
-    {_, Socket} = sys:get_state(ClientName),
+    {_, Socket, _, _, _, _} = sys:get_state(ClientName),
     ok = gen_tcp:close(Socket),
     ok = timer:sleep(100), % Give some time to the supervisor to kill the children
     [] = gen_rpc:nodes(),
     [] = supervisor:which_children(gen_rpc_client_sup),
-    [] = rpc:call(?SLAVE, supervisor, which_children, [gen_rpc_acceptor_sup]),
-    [] = rpc:call(?SLAVE, supervisor, which_children, [gen_rpc_server_sup]).
+    [] = rpc:call(?SLAVE, supervisor, which_children, [gen_rpc_acceptor_sup]).
 
 random_remote_tcp_close(_Config) ->
     {_Mega, _Sec, _Micro} = gen_rpc:call(?SLAVE, os, timestamp),
@@ -239,18 +238,24 @@ random_remote_tcp_close(_Config) ->
     ok = timer:sleep(100),
     [] = gen_rpc:nodes(),
     [] = supervisor:which_children(gen_rpc_client_sup),
-    [] = rpc:call(?SLAVE, supervisor, which_children, [gen_rpc_acceptor_sup]),
-    [] = rpc:call(?SLAVE, supervisor, which_children, [gen_rpc_server_sup]).
+    [] = rpc:call(?SLAVE, supervisor, which_children, [gen_rpc_acceptor_sup]).
 
 rpc_module_whitelist(_Config) ->
     {_Mega, _Sec, _Micro} = gen_rpc:call(?SLAVE, os, timestamp),
     ?SLAVE = gen_rpc:call(?SLAVE, erlang, node),
-    {badrpc,unauthorized} = gen_rpc:call(?SLAVE, application, which_applications).
+    {badrpc, unauthorized} = gen_rpc:call(?SLAVE, application, which_applications).
 
 rpc_module_blacklist(_Config) ->
     {badrpc, unauthorized} = gen_rpc:call(?SLAVE, os, timestamp),
     {badrpc, unauthorized} = gen_rpc:call(?SLAVE, erlang, node),
     60000 = gen_rpc:call(?SLAVE, timer, seconds, [60]).
+
+wrong_cookie(_Config) ->
+    OrigCookie = erlang:get_cookie(),
+    RandCookie = list_to_atom(atom_to_list(OrigCookie) ++ "123"),
+    true = erlang:set_cookie(node(), RandCookie),
+    {badrpc, invalid_cookie} = gen_rpc:call(?SLAVE, os, timestamp, []),
+    true = erlang:set_cookie(node(), OrigCookie).
 
 %%% ===================================================
 %%% Auxiliary functions for test cases

@@ -58,11 +58,8 @@ eval_everywhere_mfa_no_node(_Config) ->
     ConnectedNodes = [],
     abcast = gen_rpc:eval_everywhere(ConnectedNodes, erlang, whereis, [node()]),
     % Nothing catastrophically on sender side after sending call to the ether.
-    true = erlang:is_process_alive(whereis(gen_rpc_server_sup)),
     true = erlang:is_process_alive(whereis(gen_rpc_acceptor_sup)),
-    true = erlang:is_process_alive(whereis(gen_rpc_client_sup)),
-    true = erlang:is_process_alive(whereis(gen_rpc_tcp_acceptor_sup)),
-    true = erlang:is_process_alive(whereis(gen_rpc_tcp_server)).
+    true = erlang:is_process_alive(whereis(gen_rpc_client_sup)).
 
 %% Eval_everywhere is fire and forget, which means some test cases need to show
 %% something has been executed on target nodes.
@@ -110,7 +107,6 @@ eval_everywhere_mfa_exit_multiple_nodes(_Config) ->
     ConnectedNodes = [?SLAVE, ?SLAVE],
     abcast = gen_rpc:eval_everywhere(ConnectedNodes, erlang, exit, [fatal]),
     % Nothing blows up on sender side after sending call to nothing
-    true = erlang:is_process_alive(whereis(gen_rpc_server_sup)),
     true = erlang:is_process_alive(whereis(gen_rpc_acceptor_sup)),
     true = erlang:is_process_alive(whereis(gen_rpc_client_sup)).
 

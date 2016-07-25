@@ -1,4 +1,4 @@
-%%% -*-mode:erlang;coding:utf-8;tab-width:4;c-basic-offset:4;indent-tabs-mode:()-*-
+%%% -*-mode:erlang;coding:utf-8;tab-width:4;c-basic-offset:4;indent-tabs-driver:()-*-
 %%% ex: set ft=erlang fenc=utf-8 sts=4 ts=4 sw=4 et:
 %%%
 %%% Copyright 2015 Panagiotis Papadomitsos. All Rights Reserved.
@@ -17,18 +17,17 @@
 %%% Include helpful guard macros
 -include("guards.hrl").
 
-%%% Connection and reply timeouts from the TCP server
--define(TCP_SERVER_CONN_TIMEOUT, 5000).
--define(TCP_SERVER_SEND_TIMEOUT, 5000).
--define(TCP_SERVER_RECV_TIMEOUT, 5000).
-
 %%% Local state
--record(state, {socket :: port()}).
+-record(state, {socket :: port(),
+        driver :: atom(),
+        driver_mod :: atom(),
+        driver_closed :: atom(),
+        driver_error :: atom()}).
 
 %%% Supervisor functions
 -export([start_link/1, stop/1]).
 
-%%% FSM functions
+%%% Server functions
 -export([call/3, call/4, call/5, call/6, cast/3, cast/4, cast/5]).
 
 -export([async_call/3, async_call/4, yield/1, nb_yield/1, nb_yield/2]).
@@ -62,25 +61,24 @@ stop(Node) when is_atom(Node) ->
 %%% ===================================================
 %%% Server functions
 %%% ===================================================
-
 %% Simple server call with no args and default timeout values
--spec call(node(), module(), atom()|function()) -> term() | {badrpc, term()} | {badtcp | term()}.
+-spec call(node(), atom(), atom() | function()) -> term() | {badrpc,term()} | {badtcp,term()}.
 call(Node, M, F) ->
     call(Node, M, F, [], undefined, undefined).
 
 %% Simple server call with args and default timeout values
--spec call(node(), module(), atom()|function(), list()) -> term() | {badrpc, term()} | {badtcp | term()}.
+-spec call(node(), atom(), atom() | function(), list()) -> term() | {badrpc,term()} | {badtcp,term()}.
 call(Node, M, F, A) ->
     call(Node, M, F, A, undefined, undefined).
 
 %% Simple server call with custom receive timeout value
--spec call(node(), module(), atom()|function(), list(), timeout()) -> term() | {badrpc, term()} | {badtcp | term()}.
+-spec call(node(), atom(), atom() | function(), list(), timeout()) -> term() | {badrpc,term()} | {badtcp,term()}.
 call(Node, M, F, A, RecvTO) ->
     call(Node, M, F, A, RecvTO, undefined).
 
 %% Simple server call with custom receive and send timeout values
 %% This is the function that all of the above call
--spec call(node(), module(), atom()|function(), list(), timeout() | undefined, timeout() | undefined) -> term() | {badrpc, term()} | {badtcp | term()}.
+-spec call(node(), atom(), atom() | function(), list(), timeout() | undefined, timeout() | undefined) -> term() | {badrpc,term()} | {badtcp,term()}.
 call(Node, M, F, A, RecvTO, SendTO) when is_atom(Node), is_atom(M), is_atom(F), is_list(A),
                                          RecvTO =:= undefined orelse ?is_timeout(RecvTO),
                                          SendTO =:= undefined orelse ?is_timeout(SendTO) ->
@@ -108,65 +106,65 @@ call(Node, M, F, A, RecvTO, SendTO) when is_atom(Node), is_atom(M), is_atom(F), 
     end.
 
 %% Simple server cast with no args and default timeout values
--spec cast(node(), module(), atom()|function()) -> true.
+-spec cast(node(), atom(), atom() | function()) -> true.
 cast(Node, M, F) ->
     cast(Node, M, F, [], undefined).
 
 %% Simple server cast with args and default timeout values
--spec cast(node(), module(), atom()|function(), list()) -> true.
+-spec cast(node(), atom(), atom() | function(), list()) -> true.
 cast(Node, M, F, A) ->
     cast(Node, M, F, A, undefined).
 
 %% Simple server cast with custom send timeout value
 %% This is the function that all of the above casts call
--spec cast(node(), module(), atom()|function(), list(), timeout() | undefined) -> true.
+-spec cast(node(), atom(), atom() | function(), list(), timeout() | undefined) -> true.
 cast(Node, M, F, A, SendTO) when is_atom(Node), is_atom(M), is_atom(F), is_list(A),
                                  SendTO =:= undefined orelse ?is_timeout(SendTO) ->
     _WorkerPid = erlang:spawn(?MODULE, cast_worker, [Node, {cast,M,F,A}, undefined, SendTO]),
     true.
 
 %% Evaluate {M, F, A} on connected nodes.
--spec eval_everywhere([node()], module(), atom()|function()) -> abcast.
+-spec eval_everywhere([node()], atom(), atom() | function()) -> abcast.
 eval_everywhere(Nodes, M, F) ->
     eval_everywhere(Nodes, M, F, [], undefined).
 
 %% Evaluate {M, F, A} on connected nodes.
--spec eval_everywhere([node()], module(), atom()|function(), list()) -> abcast.
+-spec eval_everywhere([node()], atom(), atom() | function(), list()) -> abcast.
 eval_everywhere(Nodes, M, F, A) ->
     eval_everywhere(Nodes, M, F, A, undefined).
 
 %% Evaluate {M, F, A} on connected nodes.
--spec eval_everywhere([node()], module(), atom()|function(), list(), timeout() | undefined) -> abcast.
+-spec eval_everywhere([node()], atom(), atom() | function(), list(), timeout() | undefined) -> abcast.
 eval_everywhere(Nodes, M, F, A, SendTO) when is_list(Nodes), is_atom(M), is_atom(F), is_list(A),
                                              SendTO =:= undefined orelse ?is_timeout(SendTO) ->
     _ = [erlang:spawn(?MODULE, cast_worker, [Node, {cast,M,F,A}, abcast, SendTO]) || Node <- Nodes],
     abcast.
 
 %% Simple server async_call with no args
--spec async_call(Node::node(), M::module(), F::atom()|function()) -> term() | {badrpc, term()} | {badtcp | term()}.
+-spec async_call(node(), atom(), atom() | function()) -> term() | {badrpc,term()} | {badtcp,term()}.
 async_call(Node, M, F)->
     async_call(Node, M, F, []).
 
 %% Simple server async_call with args
--spec async_call(Node::node(), M::module(), F::atom()|function(), A::list()) -> term() | {badrpc, term()} | {badtcp | term()}.
+-spec async_call(node(), atom(), atom() | function(), list()) -> term() | {badrpc,term()} | {badtcp,term()}.
 async_call(Node, M, F, A) when is_atom(Node), is_atom(M), is_atom(F), is_list(A) ->
     Ref = erlang:make_ref(),
     Pid = erlang:spawn(?MODULE, async_call_worker, [Node, M, F, A, Ref]),
     {Pid, Ref}.
 
 %% Simple server yield with key. Delegate to nb_yield. Default timeout form configuration.
--spec yield(tuple()) -> term() | {badrpc, term()}.
+-spec yield(tuple()) -> term() | {badrpc,term()}.
 yield(Key) ->
     {value,Result} = nb_yield(Key, infinity),
     Result.
 
 %% Simple server non-blocking yield with key, default timeout value of 0
--spec nb_yield(tuple()) -> {value, term()} | {badrpc, term()}.
+-spec nb_yield(tuple()) -> {value,term()} | {badrpc,term()}.
 nb_yield(Key)->
     nb_yield(Key, 0).
 
 %% Simple server non-blocking yield with key and custom timeout value
--spec nb_yield(tuple(), timeout()) -> {value, term()} | {badrpc, term()}.
+-spec nb_yield(tuple(), timeout()) -> {value,term()} | {badrpc,term()}.
 nb_yield({Pid,Ref}, Timeout) when is_pid(Pid), is_reference(Ref), ?is_timeout(Timeout) ->
     Pid ! {self(), Ref, yield},
     receive
@@ -179,11 +177,11 @@ nb_yield({Pid,Ref}, Timeout) when is_pid(Pid), is_reference(Ref), ?is_timeout(Ti
     end.
 
 %% "Concurrent" call to a set of servers
--spec multicall(module(), atom(), list()) -> {list(), list()}.
+-spec multicall(atom(), atom(), list()) -> {list(), list()}.
 multicall(M, F, A) when is_atom(M), is_atom(F), is_list(A) ->
     multicall([node()|gen_rpc:nodes()], M, F, A).
 
--spec multicall(list() | module(), module() | atom(), atom() | list(), list() | timeout()) -> {list(), list()}.
+-spec multicall(list() | atom(), atom() | atom(), atom() | list(), list() | timeout()) -> {list(), list()}.
 multicall(M, F, A, Timeout) when is_atom(M), is_atom(F), is_list(A), ?is_timeout(Timeout) ->
     multicall([node()|gen_rpc:nodes()], M, F, A, Timeout);
 
@@ -191,7 +189,7 @@ multicall(Nodes, M, F, A) when is_list(Nodes), is_atom(M), is_atom(F), is_list(A
     Keys = [async_call(Node, M, F, A) || Node <- Nodes],
     parse_multicall_results(Keys, Nodes, undefined).
 
--spec multicall(list(), module(), atom(), list(), timeout()) -> {list(), list()}.
+-spec multicall(list(), atom(), atom(), list(), timeout()) -> {list(), list()}.
 multicall(Nodes, M, F, A, Timeout) when is_list(Nodes), is_atom(M), is_atom(F), is_list(A), ?is_timeout(Timeout) ->
     Keys = [async_call(Node, M, F, A) || Node <- Nodes],
     parse_multicall_results(Keys, Nodes, Timeout).
@@ -220,52 +218,39 @@ sbcast(Nodes, Name, Msg) when is_list(Nodes), is_atom(Name) ->
 %%% ===================================================
 init({Node}) ->
     ok = gen_rpc_helper:set_optimal_process_flags(),
-    ok = lager:info("event=initializing_client node=\"~s\"", [Node]),
-    case connect_to_tcp_server(Node) of
-        {ok, IpAddress, Port} ->
-            ok = lager:debug("event=remote_server_started_successfully server_node=\"~s\" remote_port=\"~B\"", [Node, Port]),
-            ConnTO = gen_rpc_helper:get_connect_timeout(),
-            case gen_tcp:connect(IpAddress, Port, ?DEFAULT_TCP_OPTS, ConnTO) of
-                {ok, Socket} ->
-                    ok = lager:debug("event=connecting_to_server server_node=\"~s\" peer=\"~s\" result=success",
-                                     [Node, gen_rpc_helper:peer_to_string({IpAddress, Port})]),
-                    {ok, #state{socket=Socket}, gen_rpc_helper:get_inactivity_timeout(?MODULE)};
-                {error, Reason} ->
-                    ok = lager:error("event=connecting_to_server server_node=\"~s\" server_ip=\"~s:~B\" result=failure reason=\"~p\"",
-                                     [Node, gen_rpc_helper:peer_to_string({IpAddress, Port}), Reason]),
-                    {stop, {badtcp,Reason}}
-            end;
+    {Driver, DriverMod, DriverClosed, DriverError} = gen_rpc_helper:get_transport_driver(),
+    ok = lager:info("event=initializing_client driver=~s node=\"~s\"", [Driver, Node]),
+    case DriverMod:connect(Node) of
+        {ok, Socket} ->
+            {ok, #state{socket=Socket,
+                        driver=Driver,
+                        driver_mod=DriverMod,
+                        driver_closed=DriverClosed,
+                        driver_error=DriverError}, gen_rpc_helper:get_inactivity_timeout(?MODULE)};
         {error, Reason} ->
-            {stop, {badrpc,Reason}}
+            ok = lager:error("event=client_connection_failed driver=~s reason=\"~p\"", [Driver, Reason]),
+            {stop, Reason}
     end.
 
 %% This is the actual CALL handler
-handle_call({{call,_M,_F,_A} = PacketTuple, SendTO}, Caller, #state{socket=Socket} = State) ->
+handle_call({{call,_M,_F,_A} = PacketTuple, SendTO}, Caller, #state{socket=Socket, driver=Driver, driver_mod=DriverMod} = State) ->
     Packet = erlang:term_to_binary({PacketTuple, Caller}),
-    ok = lager:debug("message=call event=constructing_call_term socket=\"~p\" caller=\"~p\"", [Socket, Caller]),
-    ok = inet:setopts(Socket, [{send_timeout, gen_rpc_helper:get_send_timeout(SendTO)}]),
-    case gen_tcp:send(Socket, Packet) of
-        {error, timeout} ->
-            ok = lager:error("message=call event=transmission_failed socket=\"~p\" caller=\"~p\" reason=\"timeout\"", [Socket, Caller]),
-            {stop, {badtcp,send_timeout}, {badtcp,send_timeout}, State};
+    ok = lager:debug("message=call event=constructing_call_term driver=~s socket=\"~p\" caller=\"~p\"", [Driver, Socket, Caller]),
+    ok = DriverMod:set_send_timeout(Socket, SendTO),
+    case DriverMod:send(Socket, Packet) of
         {error, Reason} ->
-            ok = lager:error("message=call event=transmission_failed socket=\"~p\" caller=\"~p\" reason=\"~p\"", [Socket, Caller, Reason]),
-            {stop, {badtcp,Reason}, {badtcp,Reason}, State};
+            ok = lager:error("message=call event=transmission_failed driver=~s socket=\"~p\" caller=\"~p\" reason=\"~p\"", [Driver, Socket, Caller, Reason]),
+            {stop, Reason, Reason, State};
         ok ->
-            ok = lager:debug("message=call event=transmission_succeeded socket=\"~p\" caller=\"~p\"", [Socket, Caller]),
+            ok = lager:debug("message=call event=transmission_succeeded driver=~s socket=\"~p\" caller=\"~p\"", [Driver, Socket, Caller]),
             %% We need to enable the socket and perform the call only if the call succeeds
-            ok = inet:setopts(Socket, [{active,once}]),
+            ok = DriverMod:activate(Socket),
             {noreply, State, gen_rpc_helper:get_inactivity_timeout(?MODULE)}
     end;
 
-%% Gracefully terminate
-handle_call(stop, _Caller, State) ->
-    ok = lager:debug("event=stopping_client socket=\"~p\"", [State#state.socket]),
-    {stop, normal, ok, State};
-
 %% Catch-all for calls - die if we get a message we don't expect
-handle_call(Msg, _Caller, State) ->
-    ok = lager:critical("event=uknown_call_received socket=\"~p\" message=\"~p\" action=stopping", [State#state.socket, Msg]),
+handle_call(Msg, _Caller, #state{socket=Socket, driver=Driver} = State) ->
+    ok = lager:error("event=uknown_call_received driver=~s socket=\"~p\" message=\"~p\" action=stopping", [Driver, Socket, Msg]),
     {stop, {unknown_call, Msg}, {unknown_call, Msg}, State}.
 
 %% This is the actual CAST handler for CAST
@@ -273,79 +258,76 @@ handle_cast({{cast,_M,_F,_A} = PacketTuple, SendTO}, State) ->
     send_cast(PacketTuple, State, SendTO, false);
 
 %% This is the actual CAST handler for ABCAST
-handle_cast({{abcast, _Name, _Msg} = PacketTuple, undefined}, State) ->
+handle_cast({{abcast,_Name,_Msg} = PacketTuple, undefined}, State) ->
     send_cast(PacketTuple, State, undefined, false);
 
 %% This is the actual CAST handler for SBCAST
-handle_cast({{sbcast, _Name, _Msg, _Caller} = PacketTuple, undefined}, State) ->
+handle_cast({{sbcast,_Name,_Msg,_Caller} = PacketTuple, undefined}, State) ->
     send_cast(PacketTuple, State, undefined, true);
 
 %% This is the actual ASYNC CALL handler
-handle_cast({{async_call,_M,_F,_A} = PacketTuple, Caller, Ref}, #state{socket=Socket} = State) ->
+handle_cast({{async_call,_M,_F,_A} = PacketTuple, Caller, Ref}, #state{socket=Socket, driver=Driver, driver_mod=DriverMod} = State) ->
     Packet = erlang:term_to_binary({PacketTuple, {Caller,Ref}}),
-    ok = lager:debug("message=call event=constructing_async_call_term socket=\"~p\" worker_pid=\"~p\" async_call_ref=\"~p\"",
+    ok = lager:debug("message=async_call event=constructing_async_call_term socket=\"~p\" worker_pid=\"~p\" async_call_ref=\"~p\"",
                      [Socket, Caller, Ref]),
-    ok = inet:setopts(Socket, [{send_timeout, gen_rpc_helper:get_send_timeout(undefined)}]),
-    case gen_tcp:send(Socket, Packet) of
-        {error, timeout} ->
-            ok = lager:error("message=async_call event=transmission_failed socket=\"~p\" worker_pid=\"~p\" call_ref=\"~p\" reason=\"timeout\"",
-                             [Socket, Caller, Ref]),
-            {stop, {badtcp,send_timeout}, {badtcp,send_timeout}, State};
+    ok = DriverMod:set_send_timeout(Socket, undefined),
+    case DriverMod:send(Socket, Packet) of
         {error, Reason} ->
-            ok = lager:error("message=async_call event=transmission_failed socket=\"~p\" worker_pid=\"~p\" call_ref=\"~p\" reason=\"~p\"",
-                             [Socket, Caller, Ref, Reason]),
-            {stop, {badtcp,Reason}, {badtcp,Reason}, State};
+            ok = lager:error("message=async_call event=transmission_failed driver=~s socket=\"~p\" worker_pid=\"~p\" call_ref=\"~p\" reason=\"~p\"",
+                             [Driver, Socket, Caller, Ref, Reason]),
+            {stop, Reason, Reason, State};
         ok ->
-            ok = lager:debug("message=async_call event=transmission_succeeded socket=\"~p\" worker_pid=\"~p\" call_ref=\"~p\"",
-                             [Socket, Caller, Ref]),
+            ok = lager:debug("message=async_call event=transmission_succeeded driver=~s socket=\"~p\" worker_pid=\"~p\" call_ref=\"~p\"",
+                             [Driver, Socket, Caller, Ref]),
             %% We need to enable the socket and perform the call only if the call succeeds
-            ok = inet:setopts(Socket, [{active,once}]),
+            ok = DriverMod:activate(Socket),
             %% Reply will be handled from the worker
             {noreply, State, gen_rpc_helper:get_inactivity_timeout(?MODULE)}
     end;
 
 %% Catch-all for casts - die if we get a message we don't expect
-handle_cast(Msg, State) ->
-    ok = lager:critical("event=uknown_cast_received socket=\"~p\" message=\"~p\" action=stopping", [State#state.socket, Msg]),
+handle_cast(Msg, #state{socket=Socket, driver=Driver} = State) ->
+    ok = lager:error("event=uknown_cast_received driver=~s socket=\"~p\" message=\"~p\" action=stopping", [Driver, Socket, Msg]),
     {stop, {unknown_cast, Msg}, State}.
 
 %% Handle any TCP packet coming in
-handle_info({tcp,Socket,Data}, #state{socket=Socket} = State) ->
-    _Reply = try erlang:binary_to_term(Data) of
+handle_info({Driver,Socket,Data}, #state{socket=Socket, driver=Driver, driver_mod=DriverMod} = State) ->
+    _Reply = case erlang:binary_to_term(Data) of
         {call, Caller, Reply} ->
-            ok = lager:debug("message=tcp event=call_reply_received caller=\"~p\" action=sending_reply", [Caller]),
+            ok = lager:debug("event=call_reply_received driver=~s socket=\"~p\" caller=\"~p\" action=sending_reply",
+                             [Driver, Socket, Caller]),
             gen_server:reply(Caller, Reply);
         {async_call, {Caller, Ref}, Reply} ->
-            ok = lager:debug("message=tcp event=async_call_reply_received caller=\"~p\" action=sending_reply", [Caller]),
+            ok = lager:debug("event=async_call_reply_received driver=~s socket=\"~p\" caller=\"~p\" action=sending_reply",
+                             [Driver, Socket, Caller]),
             Caller ! {self(), Ref, async_call, Reply};
         {sbcast, {Caller, Ref, Node}, Reply} ->
-            ok = lager:debug("message=tcp event=sbcast_reply_received caller=\"~p\" reference=\"~p\" action=sending_reply", [Caller, Ref]),
+            ok = lager:debug("event=sbcast_reply_received driver=~s socket=\"~p\" caller=\"~p\" reference=\"~p\" action=sending_reply",
+                             [Driver, Socket, Caller, Ref]),
             Caller ! {Ref, Node, Reply};
         OtherData ->
-            ok = lager:error("message=tcp event=erroneous_reply_received socket=\"~p\" data=\"~p\" action=ignoring", [Socket, OtherData])
-    catch
-        error:badarg ->
-            ok = lager:error("message=tcp event=corrupt_data_received socket=\"~p\" action=ignoring", [Socket])
+            ok = lager:error("event=erroneous_reply_received driver=~s socket=\"~p\" data=\"~p\" action=ignoring",
+                             [Driver, Socket, OtherData])
     end,
-    ok = inet:setopts(Socket, [{active,once}]),
+    ok = DriverMod:activate(Socket),
     {noreply, State, gen_rpc_helper:get_inactivity_timeout(?MODULE)};
 
-handle_info({tcp_closed, Socket}, #state{socket=Socket} = State) ->
-    ok = lager:warning("message=tcp_closed event=tcp_socket_closed socket=\"~p\" action=stopping", [Socket]),
+handle_info({DriverClosed, Socket}, #state{socket=Socket, driver=Driver, driver_closed=DriverClosed} = State) ->
+    ok = lager:error("message=channel_closed driver=~s socket=\"~p\" action=stopping", [Driver, Socket]),
     {stop, normal, State};
 
-handle_info({tcp_error, Socket, Reason}, #state{socket=Socket} = State) ->
-    ok = lager:warning("message=tcp_error event=tcp_socket_error socket=\"~p\" reason=\"~p\" action=stopping", [Socket, Reason]),
+handle_info({DriverError, Socket, Reason}, #state{socket=Socket, driver=Driver, driver_error=DriverError} = State) ->
+    ok = lager:error("message=channel_error driver=~s socket=\"~p\" reason=\"~p\" action=stopping", [Driver, Socket, Reason]),
     {stop, normal, State};
 
 %% Handle the inactivity timeout gracefully
-handle_info(timeout, State) ->
-    ok = lager:info("message=timeout event=client_inactivity_timeout socket=\"~p\" action=stopping", [State#state.socket]),
+handle_info(timeout, #state{socket=Socket, driver=Driver} = State) ->
+    ok = lager:info("message=timeout event=client_inactivity_timeout driver=~s socket=\"~p\" action=stopping", [Driver, Socket]),
     {stop, normal, State};
 
 %% Catch-all for info - our protocol is strict so die!
-handle_info(Msg, State) ->
-    ok = lager:critical("event=uknown_message_received socket=\"~p\" message=\"~p\" action=stopping", [State#state.socket, Msg]),
+handle_info(Msg, #state{socket=Socket, driver=Driver} = State) ->
+    ok = lager:error("event=uknown_message_received driver=~s socket=\"~p\" message=\"~p\" action=stopping", [Driver, Socket, Msg]),
     {stop, {unknown_info, Msg}, State}.
 
 %% Stub functions
@@ -358,75 +340,19 @@ terminate(_Reason, _State) ->
 %%% ===================================================
 %%% Private functions
 %%% ===================================================
-connect_to_tcp_server(Node) ->
-    Host = gen_rpc_helper:host_from_node(Node),
-    Port = gen_rpc_helper:get_remote_tcp_server_port(Node),
-    case gen_tcp:connect(Host, Port, ?DEFAULT_TCP_OPTS, ?TCP_SERVER_CONN_TIMEOUT) of
-        {ok, Socket} ->
-            ok = lager:debug("event=connecting_to_server peer=\"~s\" socket=\"~p\" result=success", [Node, Socket]),
-            {ok, {IpAddress, _Port}} = inet:peername(Socket),
-            get_node_port(Socket, IpAddress);
-        {error, Reason} ->
-            ok = lager:error("event=connecting_to_server peer=\"~s\" result=failure reason=\"~p\"", [Node, Reason]),
-            {error, Reason}
-    end.
-
-get_node_port(Socket, IpAddress) ->
-    Cookie = erlang:get_cookie(),
-    Packet = erlang:term_to_binary({start_gen_rpc_server, Cookie}),
-    ok = inet:setopts(Socket, [{send_timeout, ?TCP_SERVER_SEND_TIMEOUT}]),
-    case gen_tcp:send(Socket, Packet) of
-        {error, Reason} ->
-            ok = lager:error("event=transmission_failed socket=\"~p\" reason=\"~p\"", [Socket, Reason]),
-            ok = gen_tcp:close(Socket),
-            {error, Reason};
-        ok ->
-            ok = lager:debug("event=transmission_succeeded socket=\"~p\"", [Socket]),
-            case gen_tcp:recv(Socket, 0, ?TCP_SERVER_RECV_TIMEOUT) of
-                {ok, RecvPacket} ->
-                    try erlang:binary_to_term(RecvPacket) of
-                        {gen_rpc_server_started, Port} ->
-                            ok = lager:debug("event=reception_succeeded socket=\"~p\"", [Socket]),
-                            ok = gen_tcp:close(Socket),
-                            {ok, IpAddress, Port};
-                        {connection_rejected, invalid_cookie} ->
-                            ok = lager:notice("event=reception_failed socket=\"~p\" reason=\"invalid_cookie\"", [Socket]),
-                            ok = gen_tcp:close(Socket),
-                            {error, invalid_cookie};
-                        _Else ->
-                            ok = lager:debug("event=reception_failed socket=\"~p\" reason=\"invalid_payload\"", [Socket]),
-                            ok = gen_tcp:close(Socket),
-                            {error, invalid_message}
-                    catch
-                        error:badarg ->
-                            ok = lager:debug("event=reception_failed socket=\"~p\" reason=\"invalid_erlang_term\"", [Socket]),
-                            ok = gen_tcp:close(Socket),
-                            {error, invalid_payload}
-                    end;
-                {error, Reason} ->
-                    ok = lager:debug("event=reception_failed socket=\"~p\" reason=\"~p\"", [Socket, Reason]),
-                    ok = gen_tcp:close(Socket),
-                    {error, Reason}
-            end
-    end.
-
-send_cast(PacketTuple, #state{socket=Socket} = State, SendTO, Activate) ->
+send_cast(PacketTuple, #state{socket=Socket, driver=Driver, driver_mod=DriverMod} = State, SendTO, Activate) ->
     Packet = erlang:term_to_binary(PacketTuple),
-    ok = lager:debug("event=constructing_cast_term cast=\"~p\" socket=\"~p\"", [PacketTuple, Socket]),
-    ok = inet:setopts(Socket, [{send_timeout, gen_rpc_helper:get_send_timeout(SendTO)}]),
-    case gen_tcp:send(Socket, Packet) of
-        {error, timeout} ->
-            %% Terminate will handle closing the socket
-            ok = lager:error("message=cast event=transmission_failed socket=\"~p\" reason=\"timeout\"", [Socket]),
-            {stop, {badtcp,send_timeout}, State};
+    ok = lager:debug("event=constructing_cast_term driver=~s socket=\"~p\" cast=\"~p\"", [Driver, Socket, PacketTuple]),
+    ok = DriverMod:set_send_timeout(Socket, SendTO),
+    case DriverMod:send(Socket, Packet) of
         {error, Reason} ->
-            ok = lager:error("message=cast event=transmission_failed socket=\"~p\" reason=\"~p\"", [Socket, Reason]),
-            {stop, {badtcp,Reason}, State};
+            ok = lager:error("message=cast event=transmission_failed driver=~s socket=\"~p\" reason=\"~p\"", [Driver, Socket, Reason]),
+            {stop, Reason, State};
         ok ->
-            if Activate =:= true -> ok = inet:setopts(Socket, [{active,once}]);
+            ok = if Activate =:= true -> DriverMod:activate(Socket);
                true -> ok
             end,
-            ok = lager:debug("message=cast event=transmission_succeeded socket=\"~p\"", [Socket]),
+            ok = lager:debug("message=cast event=transmission_succeeded driver=~s socket=\"~p\"", [Driver, Socket]),
             {noreply, State, gen_rpc_helper:get_inactivity_timeout(?MODULE)}
     end.
 
@@ -462,7 +388,7 @@ async_call_worker(Node, M, F, A, Ref) ->
                 {ok, NewPid} ->
                     ok = gen_server:cast(NewPid, {{async_call,M,F,A}, self(), Ref}),
                     NewPid;
-                {error, {badrpc, _} = RpcError} ->
+                {error, {badrpc,_} = RpcError} ->
                     RpcError
             end;
         Pid ->

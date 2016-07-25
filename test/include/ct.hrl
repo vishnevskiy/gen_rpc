@@ -18,11 +18,14 @@
         {sasl, error_logger_mf_dir, false},
         {gen_rpc, connect_timeout, 500},
         {gen_rpc, send_timeout, 500},
-        {gen_rpc, remote_tcp_server_ports, [
-            {?MASTER, 5369},
-            {?SLAVE, 5370}
-        ]},
-        {lager, colored, true},
+        {gen_rpc, remote_ports, #{
+            ?MASTER => 5369,
+            ?SLAVE => 5370
+        }},
+        {lager, log_root, "./log"},
+        {lager, crash_log, "crash.log"},
+        {lager, crash_log_size, 0},
+        {lager, colored, false},
         {lager, handlers, [
             % Commented out to reduce test output polution, uncomment during development
             % {lager_common_test_backend, [debug,

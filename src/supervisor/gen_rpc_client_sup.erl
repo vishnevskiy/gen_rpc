@@ -41,7 +41,6 @@ start_child(Node) when is_atom(Node) ->
 stop_child(Pid) when is_pid(Pid) ->
     ok = lager:debug("event=stopping_client client_pid=\"~p\"", [Pid]),
     _ = supervisor:terminate_child(?MODULE, Pid),
-    _ = supervisor:delete_child(?MODULE, Pid),
     ok.
 
 -spec children_names() -> list().
@@ -67,4 +66,3 @@ init([]) ->
     {ok, {{simple_one_for_one, 100, 1}, [
         {gen_rpc_client, {gen_rpc_client,start_link,[]}, temporary, 5000, worker, [gen_rpc_client]}
     ]}}.
-

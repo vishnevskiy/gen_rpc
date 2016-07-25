@@ -15,5 +15,5 @@ branches:
     - develop
 notifications:
   email:
-    - priestjim@gmail.com
+    - pj@ezgr.net
 

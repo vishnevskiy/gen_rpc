@@ -101,11 +101,9 @@ end_per_testcase(_OtherTest, Config) ->
 %%% ===================================================
 %% Test supervisor's status
 supervisor_black_box(_Config) ->
-    true = erlang:is_process_alive(whereis(gen_rpc_server_sup)),
     true = erlang:is_process_alive(whereis(gen_rpc_acceptor_sup)),
-    true = erlang:is_process_alive(whereis(gen_rpc_tcp_acceptor_sup)),
     true = erlang:is_process_alive(whereis(gen_rpc_client_sup)),
-    true = erlang:is_process_alive(whereis(gen_rpc_tcp_server)),
+    true = erlang:is_process_alive(whereis(gen_rpc_server)),
     true = erlang:is_process_alive(whereis(gen_rpc_dispatcher)),
     ok.
 
@@ -267,9 +265,7 @@ server_inactivity_timeout(_Config) ->
     {_Mega, _Sec, _Micro} = gen_rpc:call(?MASTER, os, timestamp),
     ok = timer:sleep(600),
     %% Lookup the client named process, shouldn't be there
-    [] = supervisor:which_children(gen_rpc_acceptor_sup),
-    %% The server supervisor should have no children
-    [] = supervisor:which_children(gen_rpc_server_sup).
+    [] = supervisor:which_children(gen_rpc_acceptor_sup).
 
 random_tcp_close(_Config) ->
     {_Mega, _Sec, _Micro} = gen_rpc:call(?MASTER, os, timestamp),
@@ -277,19 +273,21 @@ random_tcp_close(_Config) ->
     true = erlang:exit(AccPid, normal),
     ok = timer:sleep(500), % Give some time to the supervisor to kill the children
     [] = gen_rpc:nodes(),
-    [] = supervisor:which_children(gen_rpc_server_sup),
     [] = supervisor:which_children(gen_rpc_acceptor_sup),
     [] = supervisor:which_children(gen_rpc_client_sup).
 
 rpc_module_whitelist(_Config) ->
     {_Mega, _Sec, _Micro} = gen_rpc:call(?MASTER, os, timestamp),
     ?MASTER = gen_rpc:call(?MASTER, erlang, node),
-    {badrpc,unauthorized} = gen_rpc:call(?MASTER, application, which_applications).
+    {badrpc, unauthorized} = gen_rpc:call(?MASTER, application, which_applications).
 
 rpc_module_blacklist(_Config) ->
     {badrpc, unauthorized} = gen_rpc:call(?MASTER, os, timestamp),
     {badrpc, unauthorized} = gen_rpc:call(?MASTER, erlang, node),
     60000 = gen_rpc:call(?MASTER, timer, seconds, [60]).
+
+stub(_Config) ->
+    ok = gen_rpc_driver:stub().
 
 %%% ===================================================
 %%% Auxiliary functions for test cases
