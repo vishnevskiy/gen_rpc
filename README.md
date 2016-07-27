@@ -27,7 +27,7 @@ Remote spawn was not designed to ship large amounts of data as part of the call'
 
 This message essentially means that the VM's distributed port pair was busy while the VM was trying to use it for some other task like _Distributed Erlang heartbeat beacons_ or _mnesia synchronization_. This of course wrecks havoc in certain timing expectations these subsystems have and the results can be very problematic: the VM might detect a node as disconnected even though everything is perfectly healthy and `mnesia` might misdetect a network partition.
 
-`gen_rpc` solves both these problems by sharding data coming from different nodes to different processes (hence different mailboxes) and by using different `gen_tcp` ports for different nodes (hence not utilizing the Distributed Erlang ports).
+`gen_rpc` solves both these problems by sharding data coming from different nodes to different processes (hence different mailboxes) and by using a different `gen_tcp` port for different nodes (hence not utilizing the Distributed Erlang ports).
 
 # Build Dependencies
 
@@ -152,11 +152,17 @@ For more information on what the functions below do, run `erl -man rpc`.
 
 - `eval_everywhere(Module, Function, Args)` and `eval_everywhere(Nodes, Module, Function, Args)`: Multi-node version of the `cast` function.
 
+### Module version control
+
+`gen_rpc` supports executing RPC calls on remote nodes that are running only specific module versions. To leverage that feature, in place of `Module` in the section above, use `{Module, Version}`. If the remote `module` is not on the version requested a `{badrpc,incompatible]` will be returned.
+
 ### Application settings
 
-- `tcp_server_port`: The port in which the TCP listener service listens for incoming client requests.
+- `transport_driver`: The driver to use in order to trasport data between the nodes. Currently, only supports `tcp` for plain TCP connectivity or `ssl` for SSL-based connectivity.
 
-- `remote_tcp_server_ports`: A proplist with the nodes that run on alternative `tcp_server_port` configuration and the port
+- `port`: The port in which the TCP listener service listens for incoming client requests.
+
+- `remote_ports`: A map with the nodes that run on alternative `port` configuration and the port
   they have configured `gen_rpc` to listen to. Useful when running multiple nodes on the same system and you get port clashes.
 
 - `rpc_module_control`: Set it to `blacklist` to define a list of modules that will not be exposed to `gen_rpc` or to `whitelist`
@@ -188,21 +194,17 @@ In order to achieve the mailbox-per-node feature, `gen_rpc` uses a very specific
 
 - The `dispatcher` process will launch a new `client` process through the client's supervisor.
 
-- The new client process will connect to the remote node's `tcp listener`, submit a requeset for a new server and wait.
+- The new client process will connect to the remote node's `gen_rpc server`, submit a requeset for a new server and wait.
 
-- The `tcp listener` server will ask the `server` supervisor to launch a new `server` process, which in turn will dynamically allocate (`gen_tcp:listen(0)`) a port and return it.
+- The `gen_rpc server` server will ask the `acceptor` supervisor to launch a new `acceptor` process and hands it off the new socket connection.
 
-- The `server` supervisor returns the port to the `tcp listener` which in turn returns it to the `client` through the TCP channel.
-
-- The `server` then shuts down the TCP channel as its purpose has been fullfilled (which also minimizes file descriptor usage).
-
-- The `client` then connects to the returned port and establishes a TCP session. The `server` on the other node launches a new `acceptor` server as soon as a `client` connects. The relationship between `client`-`server`-`acceptor` is one-to-one-to-one.
+- The `acceptor` takes over the new socket and authenticates the `client` with the current Erlang cookie.
 
 - The `client` finally encodes the request (`call`, `cast` etc.) along with some metadata (the caller's PID and a reference) and sends it over the TCP channel. In case of an `async call`, the `client` also launches a process that will be responsible for handing the server's reply to the requester.
 
-- The `server` on the other side decodes the TCP message received and spawns a new process that will perform the requested function. By spawning a process external to the server, the `server` protects itself from misbehaving function calls.
+- The `acceptor` on the other side decodes the TCP message received and spawns a new process that will perform the requested function. By spawning a process external to the server, the `acceptor` protects itself from misbehaving function calls.
 
-- As soon as the reply from the server is ready (only needed in `async_call` and `call`), the `server` spawned process messages the server with the reply, the `server` ships it through the TCP channel to the `client` and the client send the message back to the requester. In the case of `async call`, the `client` messages the spawned worker and the worker replies to the caller with the result.
+- As soon as the reply from the server is ready (only needed in `async_call` and `call`), the `acceptor` spawned process messages the server with the reply, the `acceptor` ships it through the TCP channel to the `client` and the client send the message back to the requester. In the case of `async call`, the `client` messages the spawned worker and the worker replies to the caller with the result.
 
 All `gen_tcp` processes are properly linked so that any TCP failure will cascade and close the TCP channels and any new connection will allocate a new process and port.
 
