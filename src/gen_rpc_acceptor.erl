@@ -1,4 +1,4 @@
-%%% -*-mode:erlang;coding:utf-8;tab-width:4;c-basic-offset:4;indent-tabs-driver:()-*-
+%%% -*-mode:erlang;coding:utf-8;tab-width:4;c-basic-offset:4;indent-tabs-mode:()-*-
 %%% ex: set ft=erlang fenc=utf-8 sts=4 ts=4 sw=4 et:
 %%%
 %%% Copyright 2015 Panagiotis Papadomitsos. All Rights Reserved.
@@ -136,28 +136,44 @@ waiting_for_data(info, {Driver,Socket,Data},
     %% the data
     try erlang:binary_to_term(Data) of
         {{CallType,M,F,A}, Caller} when CallType =:= call; CallType =:= async_call ->
-            case is_allowed(M, Control, List) of
+            {VsnAllowed, RealM} = check_module_version(M),
+            case check_if_allowed(RealM, Control, List) of
                 true ->
-                    WorkerPid = erlang:spawn(?MODULE, call_worker, [self(), CallType, M, F, A, Caller]),
-                    ok = lager:debug("event=call_received driver=~s socket=\"~p\" peer=\"~s\" caller=\"~p\" worker_pid=\"~p\"",
-                                     [Driver, Socket, gen_rpc_helper:peer_to_string(Peer), Caller, WorkerPid]),
-                    ok = DriverMod:activate(Socket),
-                    {keep_state_and_data, gen_rpc_helper:get_inactivity_timeout(?MODULE)};
+                    case VsnAllowed of
+                        true ->
+                            WorkerPid = erlang:spawn(?MODULE, call_worker, [self(), CallType, RealM, F, A, Caller]),
+                            ok = lager:debug("event=call_received driver=~s socket=\"~p\" peer=\"~s\" caller=\"~p\" worker_pid=\"~p\"",
+                                             [Driver, Socket, gen_rpc_helper:peer_to_string(Peer), Caller, WorkerPid]),
+                            ok = DriverMod:activate(Socket),
+                            {keep_state_and_data, gen_rpc_helper:get_inactivity_timeout(?MODULE)};
+                        false ->
+                            ok = lager:debug("event=incompatible_module_version driver=~s socket=\"~p\" method=~s module=~s",
+                                             [Driver, Socket, CallType, RealM]),
+                            ok = DriverMod:activate(Socket),
+                            waiting_for_data(info, {CallType, Caller, {badrpc,incompatible}}, State)
+                    end;
                 false ->
-                    ok = lager:debug("event=request_not_allowed driver=~s socket=\"~p\" control=~s method=~s driver_mod=\"~s\"",
-                                     [Driver, Socket, Control, CallType, M]),
+                    ok = lager:debug("event=request_not_allowed driver=~s socket=\"~p\" control=~s method=~s module=~s",
+                                     [Driver, Socket, Control, CallType, RealM]),
                     ok = DriverMod:activate(Socket),
                     waiting_for_data(info, {CallType, Caller, {badrpc,unauthorized}}, State)
             end;
         {cast, M, F, A} ->
-            _Result = case is_allowed(M, Control, List) of
+            {VsnAllowed, RealM} = check_module_version(M),
+            _Result = case check_if_allowed(RealM, Control, List) of
                 true ->
-                    ok = lager:debug("event=cast_received driver=~s socket=\"~p\" peer=\"~s\" driver_mod=~s function=~s args=\"~p\"",
-                                     [Driver, Socket, gen_rpc_helper:peer_to_string(Peer), M, F, A]),
-                    _Pid = erlang:spawn(M, F, A);
+                    case VsnAllowed of
+                        true ->
+                            ok = lager:debug("event=cast_received driver=~s socket=\"~p\" peer=\"~s\" module=~s function=~s args=\"~p\"",
+                                             [Driver, Socket, gen_rpc_helper:peer_to_string(Peer), RealM, F, A]),
+                            _Pid = erlang:spawn(RealM, F, A);
+                        false ->
+                            ok = lager:debug("event=incompatible_module_version driver=~s socket=\"~p\" module=~s",
+                                             [Driver, Socket, RealM])
+                    end;
                 false ->
-                    ok = lager:debug("event=request_not_allowed driver=~s socket=\"~p\" control=~s method=cast driver_mod=\"~s\"",
-                                     [Driver, Socket,Control,M])
+                    ok = lager:debug("event=request_not_allowed driver=~s socket=\"~p\" control=~s method=cast module=~s",
+                                     [Driver, Socket, Control, RealM])
             end,
             ok = DriverMod:activate(Socket),
             {keep_state_and_data, gen_rpc_helper:get_inactivity_timeout(?MODULE)};
@@ -229,7 +245,7 @@ code_change(_OldVsn, StateName, State, _Extra) ->
 %%% ===================================================
 %%% Private functions
 %%% ===================================================
-%% Process an RPC call request outside of the FSM
+%% Process an RPC call request outside of the state machine
 call_worker(Server, CallType, M, F, A, Caller) ->
     ok = lager:debug("event=call_received caller=\"~p\" module=~s function=~s args=\"~p\"", [Caller, M, F, A]),
     % If called MFA return exception, not of type term().
@@ -256,11 +272,38 @@ call_middleman(M, F, A) ->
     erlang:exit({call_middleman_result, Res}),
     ok.
 
-is_allowed(_DriverMod, undefined, _List) ->
+%% Check if the function is RPC-enabled
+check_if_allowed(_DriverMod, undefined, _List) ->
     true;
 
-is_allowed(DriverMod, whitelist, List) when is_atom(DriverMod) ->
-    sets:is_element(DriverMod, List);
+check_if_allowed(Module, whitelist, List) ->
+    sets:is_element(Module, List);
 
-is_allowed(DriverMod, blacklist, List) when is_atom(DriverMod) ->
-    not sets:is_element(DriverMod, List).
+check_if_allowed(Module, blacklist, List) ->
+    not sets:is_element(Module, List).
+
+%% Check if the module version called is compatible with the one
+%% requested by the caller
+check_module_version({M, Version}) ->
+    try
+        Attrs = M:module_info(attributes),
+        {vsn, VsnList} = lists:keyfind(vsn, 1, Attrs),
+        case VsnList of
+            [Vsn] when Vsn =:= Version ->
+                {true, M};
+            Vsn when Vsn =:= Version ->
+                {true, M};
+            _Else ->
+                {false, M}
+        end
+    catch
+        error:undef ->
+            ok = lager:debug("event=module_not_found module=~s", [M]),
+            {false, M};
+        error:badarg ->
+            ok = lager:debug("event=invalid_module_definition module=\"~p\"", [M]),
+            {false, M}
+    end;
+
+check_module_version(M) ->
+    {true, M}.

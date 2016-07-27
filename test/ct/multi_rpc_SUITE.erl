@@ -131,6 +131,18 @@ multicall_multiple_nodes(_Config) ->
     Nodes = gen_rpc:nodes(),
     true = lists:member(?SLAVE, Nodes).
 
+multicall_with_bad_module_version(_Config) ->
+    ConnectedNodes = [?SLAVE, ?SLAVE],
+    {[], ConnectedNodes} = gen_rpc:multicall(ConnectedNodes, {gen_rpc_test_helper, "X.Y.Z"}, stub_function, []),
+    Nodes = gen_rpc:nodes(),
+    true = lists:member(?SLAVE, Nodes).
+
+multicall_with_good_module_version(_Config) ->
+    ConnectedNodes = [?SLAVE, ?SLAVE],
+    {[stub_function, stub_function], []} = gen_rpc:multicall(ConnectedNodes, {gen_rpc_test_helper, "1.0.0"}, stub_function, []),
+    Nodes = gen_rpc:nodes(),
+    true = lists:member(?SLAVE, Nodes).
+
 multicall_multiple_nodes_and_local(_Config) ->
     ConnectedNodes = [?SLAVE, ?SLAVE],
     {[{_,_,_}, {_,_,_}], []} = gen_rpc:multicall(ConnectedNodes, os, timestamp, []),

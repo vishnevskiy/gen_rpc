@@ -27,7 +27,7 @@
         {lager, crash_log_size, 0},
         {lager, colored, false},
         {lager, handlers, [
-            % Commented out to reduce test output polution, uncomment during development
+            %% Commented out to reduce test output polution, uncomment during development
             % {lager_common_test_backend, [debug,
             %     {lager_default_formatter, ["[", date, " ", time, "] severity=", severity, " node=\"", {node, "undefined"}, "\" pid=\"", pid,
             %         "\" module=", {module, "gen_rpc"}, " function=", {function, "undefined"}, " ", message, "\n"]}]},

@@ -106,6 +106,16 @@ call_with_receive_timeout(_Config) ->
     {badrpc, timeout} = gen_rpc:call(?SLAVE, timer, sleep, [500], 100),
     ok = timer:sleep(500).
 
+call_module_version_check_success(_Config) ->
+    stub_function = gen_rpc:call(?SLAVE, {gen_rpc_test_helper, "1.0.0"}, stub_function, []).
+
+call_module_version_check_incompatible(_Config) ->
+    {badrpc, incompatible} = gen_rpc:call(?SLAVE, {gen_rpc_test_helper, "X.Y.Z"}, stub_function, []).
+
+call_module_version_check_invalid(_Config) ->
+    {badrpc, incompatible} = gen_rpc:call(?SLAVE, {gen_rpc_test_helper1, "X.Y.Z"}, stub_function, []),
+    {badrpc, incompatible} = gen_rpc:call(?SLAVE, {rpc, 1}, cast, []).
+
 interleaved_call(_Config) ->
     %% Spawn 3 consecutive processes that execute gen_rpc:call
     %% to the remote node and wait an inversely proportionate time

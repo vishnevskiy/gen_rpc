@@ -138,6 +138,16 @@ call_with_receive_timeout(_Config) ->
 call_with_worker_kill(_Config) ->
     {badrpc, killed} = gen_rpc:call(?MASTER, timer, kill_after, [0]).
 
+call_module_version_check_success(_Config) ->
+    stub_function = gen_rpc:call(?MASTER, {gen_rpc_test_helper, "1.0.0"}, stub_function, []).
+
+call_module_version_check_incompatible(_Config) ->
+    {badrpc, incompatible} = gen_rpc:call(?MASTER, {gen_rpc_test_helper, "X.Y.Z"}, stub_function, []).
+
+call_module_version_check_invalid(_Config) ->
+    {badrpc, incompatible} = gen_rpc:call(?MASTER, {gen_rpc_test_helper1, "X.Y.Z"}, stub_function, []),
+    {badrpc, incompatible} = gen_rpc:call(?MASTER, {rpc, 1}, cast, []).
+
 interleaved_call(_Config) ->
     %% Spawn 3 consecutive processes that execute gen_rpc:call
     %% to the remote node and wait an inversely proportionate time
@@ -286,7 +296,7 @@ rpc_module_blacklist(_Config) ->
     {badrpc, unauthorized} = gen_rpc:call(?MASTER, erlang, node),
     60000 = gen_rpc:call(?MASTER, timer, seconds, [60]).
 
-stub(_Config) ->
+driver_stub(_Config) ->
     ok = gen_rpc_driver:stub().
 
 %%% ===================================================

@@ -5,6 +5,7 @@
 %%%
 -module(gen_rpc_test_helper).
 -author("Panagiotis Papadomitsos <pj@ezgr.net>").
+-vsn("1.0.0").
 
 %%% CT Macros
 -include_lib("test/include/ct.hrl").
@@ -19,6 +20,7 @@
         make_process_name/2,
         spawn_long_running/1,
         spawn_short_running/0,
+        stub_function/0,
         ping/1]).
 
 %%% ===================================================
@@ -105,6 +107,9 @@ spawn_long_running(TimeSpan) ->
 
 spawn_short_running() ->
     spawn(fun() -> exit(normal) end).
+
+stub_function() ->
+  stub_function.
 
 ping({Node, Process, Msg}) ->
     {Process, Node} ! {pong, {node(), Process, Msg}}.

@@ -1,4 +1,4 @@
-%%% -*-mode:erlang;coding:utf-8;tab-width:4;c-basic-offset:4;indent-tabs-driver:()-*-
+%%% -*-mode:erlang;coding:utf-8;tab-width:4;c-basic-offset:4;indent-tabs-mode:()-*-
 %%% ex: set ft=erlang fenc=utf-8 sts=4 ts=4 sw=4 et:
 %%%
 %%% Copyright 2015 Panagiotis Papadomitsos. All Rights Reserved.
@@ -62,24 +62,25 @@ stop(Node) when is_atom(Node) ->
 %%% Server functions
 %%% ===================================================
 %% Simple server call with no args and default timeout values
--spec call(node(), atom(), atom() | function()) -> term() | {badrpc,term()} | {badtcp,term()}.
+-spec call(node(), atom() | tuple(), atom() | function()) -> term() | {badrpc,term()} | {badtcp,term()}.
 call(Node, M, F) ->
     call(Node, M, F, [], undefined, undefined).
 
 %% Simple server call with args and default timeout values
--spec call(node(), atom(), atom() | function(), list()) -> term() | {badrpc,term()} | {badtcp,term()}.
+-spec call(node(), atom() | tuple(), atom() | function(), list()) -> term() | {badrpc,term()} | {badtcp,term()}.
 call(Node, M, F, A) ->
     call(Node, M, F, A, undefined, undefined).
 
 %% Simple server call with custom receive timeout value
--spec call(node(), atom(), atom() | function(), list(), timeout()) -> term() | {badrpc,term()} | {badtcp,term()}.
+-spec call(node(), atom() | tuple(), atom() | function(), list(), timeout()) -> term() | {badrpc,term()} | {badtcp,term()}.
 call(Node, M, F, A, RecvTO) ->
     call(Node, M, F, A, RecvTO, undefined).
 
 %% Simple server call with custom receive and send timeout values
 %% This is the function that all of the above call
--spec call(node(), atom(), atom() | function(), list(), timeout() | undefined, timeout() | undefined) -> term() | {badrpc,term()} | {badtcp,term()}.
-call(Node, M, F, A, RecvTO, SendTO) when is_atom(Node), is_atom(M), is_atom(F), is_list(A),
+-spec call(node(), atom() | tuple(), atom() | function(), list(), timeout() | undefined, timeout() | undefined) ->
+    term() | {badrpc,term()} | {badtcp,term()}.
+call(Node, M, F, A, RecvTO, SendTO) when is_atom(Node), is_atom(M) orelse is_tuple(M), is_atom(F), is_list(A),
                                          RecvTO =:= undefined orelse ?is_timeout(RecvTO),
                                          SendTO =:= undefined orelse ?is_timeout(SendTO) ->
     %% Create a unique name for the client because we register as such
@@ -106,48 +107,48 @@ call(Node, M, F, A, RecvTO, SendTO) when is_atom(Node), is_atom(M), is_atom(F), 
     end.
 
 %% Simple server cast with no args and default timeout values
--spec cast(node(), atom(), atom() | function()) -> true.
+-spec cast(node(), atom() | tuple(), atom() | function()) -> true.
 cast(Node, M, F) ->
     cast(Node, M, F, [], undefined).
 
 %% Simple server cast with args and default timeout values
--spec cast(node(), atom(), atom() | function(), list()) -> true.
+-spec cast(node(), atom() | tuple(), atom() | function(), list()) -> true.
 cast(Node, M, F, A) ->
     cast(Node, M, F, A, undefined).
 
 %% Simple server cast with custom send timeout value
 %% This is the function that all of the above casts call
--spec cast(node(), atom(), atom() | function(), list(), timeout() | undefined) -> true.
-cast(Node, M, F, A, SendTO) when is_atom(Node), is_atom(M), is_atom(F), is_list(A),
+-spec cast(node(), atom() | tuple(), atom() | function(), list(), timeout() | undefined) -> true.
+cast(Node, M, F, A, SendTO) when is_atom(Node), is_atom(M) orelse is_tuple(M), is_atom(F), is_list(A),
                                  SendTO =:= undefined orelse ?is_timeout(SendTO) ->
     _WorkerPid = erlang:spawn(?MODULE, cast_worker, [Node, {cast,M,F,A}, undefined, SendTO]),
     true.
 
 %% Evaluate {M, F, A} on connected nodes.
--spec eval_everywhere([node()], atom(), atom() | function()) -> abcast.
+-spec eval_everywhere([node()], atom() | tuple(), atom() | function()) -> abcast.
 eval_everywhere(Nodes, M, F) ->
     eval_everywhere(Nodes, M, F, [], undefined).
 
 %% Evaluate {M, F, A} on connected nodes.
--spec eval_everywhere([node()], atom(), atom() | function(), list()) -> abcast.
+-spec eval_everywhere([node()], atom() | tuple(), atom() | function(), list()) -> abcast.
 eval_everywhere(Nodes, M, F, A) ->
     eval_everywhere(Nodes, M, F, A, undefined).
 
 %% Evaluate {M, F, A} on connected nodes.
--spec eval_everywhere([node()], atom(), atom() | function(), list(), timeout() | undefined) -> abcast.
-eval_everywhere(Nodes, M, F, A, SendTO) when is_list(Nodes), is_atom(M), is_atom(F), is_list(A),
+-spec eval_everywhere([node()], atom() | tuple(), atom() | function(), list(), timeout() | undefined) -> abcast.
+eval_everywhere(Nodes, M, F, A, SendTO) when is_list(Nodes), is_atom(M) orelse is_tuple(M), is_atom(F), is_list(A),
                                              SendTO =:= undefined orelse ?is_timeout(SendTO) ->
     _ = [erlang:spawn(?MODULE, cast_worker, [Node, {cast,M,F,A}, abcast, SendTO]) || Node <- Nodes],
     abcast.
 
 %% Simple server async_call with no args
--spec async_call(node(), atom(), atom() | function()) -> term() | {badrpc,term()} | {badtcp,term()}.
-async_call(Node, M, F)->
+-spec async_call(node(), atom() | tuple(), atom() | function()) -> term() | {badrpc,term()} | {badtcp,term()}.
+async_call(Node, M, F) ->
     async_call(Node, M, F, []).
 
 %% Simple server async_call with args
--spec async_call(node(), atom(), atom() | function(), list()) -> term() | {badrpc,term()} | {badtcp,term()}.
-async_call(Node, M, F, A) when is_atom(Node), is_atom(M), is_atom(F), is_list(A) ->
+-spec async_call(node(), atom() | tuple(), atom() | function(), list()) -> term() | {badrpc,term()} | {badtcp,term()}.
+async_call(Node, M, F, A) when is_atom(Node), is_atom(M) orelse is_tuple(M), is_atom(F), is_list(A) ->
     Ref = erlang:make_ref(),
     Pid = erlang:spawn(?MODULE, async_call_worker, [Node, M, F, A, Ref]),
     {Pid, Ref}.
@@ -177,20 +178,20 @@ nb_yield({Pid,Ref}, Timeout) when is_pid(Pid), is_reference(Ref), ?is_timeout(Ti
     end.
 
 %% "Concurrent" call to a set of servers
--spec multicall(atom(), atom(), list()) -> {list(), list()}.
-multicall(M, F, A) when is_atom(M), is_atom(F), is_list(A) ->
+-spec multicall(atom() | tuple(), atom(), list()) -> {list(), list()}.
+multicall(M, F, A) when is_atom(M) orelse is_tuple(M), is_atom(F), is_list(A) ->
     multicall([node()|gen_rpc:nodes()], M, F, A).
 
--spec multicall(list() | atom(), atom() | atom(), atom() | list(), list() | timeout()) -> {list(), list()}.
-multicall(M, F, A, Timeout) when is_atom(M), is_atom(F), is_list(A), ?is_timeout(Timeout) ->
+-spec multicall(list() | atom() | tuple(), atom() | tuple(), atom() | list(), list() | timeout()) -> {list(), list()}.
+multicall(M, F, A, Timeout) when is_atom(M) orelse is_tuple(M), is_atom(F), is_list(A), ?is_timeout(Timeout) ->
     multicall([node()|gen_rpc:nodes()], M, F, A, Timeout);
 
-multicall(Nodes, M, F, A) when is_list(Nodes), is_atom(M), is_atom(F), is_list(A) ->
+multicall(Nodes, M, F, A) when is_list(Nodes), is_atom(M) orelse is_tuple(M), is_atom(F), is_list(A) ->
     Keys = [async_call(Node, M, F, A) || Node <- Nodes],
     parse_multicall_results(Keys, Nodes, undefined).
 
--spec multicall(list(), atom(), atom(), list(), timeout()) -> {list(), list()}.
-multicall(Nodes, M, F, A, Timeout) when is_list(Nodes), is_atom(M), is_atom(F), is_list(A), ?is_timeout(Timeout) ->
+-spec multicall(list(), atom() | tuple(), atom(), list(), timeout()) -> {list(), list()}.
+multicall(Nodes, M, F, A, Timeout) when is_list(Nodes), is_atom(M) orelse is_tuple(M), is_atom(F), is_list(A), ?is_timeout(Timeout) ->
     Keys = [async_call(Node, M, F, A) || Node <- Nodes],
     parse_multicall_results(Keys, Nodes, Timeout).
 
