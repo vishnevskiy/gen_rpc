@@ -17,8 +17,10 @@
         set_optimal_process_flags/0,
         make_process_name/2,
         extract_node_name/1,
+        merge_sockopt_lists/2,
         get_transport_driver/0,
-        get_remote_port/1,
+        get_transport_driver_per_node/1,
+        get_port_per_node/1,
         get_connect_timeout/0,
         get_send_timeout/1,
         get_call_receive_timeout/1,
@@ -90,20 +92,34 @@ extract_node_name(PidName) when is_atom(PidName) ->
     PidStr = atom_to_list(PidName),
     list_to_atom(lists:nthtail(15, PidStr)).
 
+%% Merge lists that contain both tuples and simple values observing
+%% keys in proplists
+-spec merge_sockopt_lists(list(), list()) -> list().
+merge_sockopt_lists(List1, List2) ->
+    SList1 = lists:usort(fun hybrid_proplist_compare/2, List1),
+    SList2 = lists:usort(fun hybrid_proplist_compare/2, List2),
+    lists:umerge(fun hybrid_proplist_compare/2, SList1, SList2).
+
 %% Return the connection mode and helper module
 -spec get_transport_driver() -> tuple().
 get_transport_driver() ->
-    case application:get_env(?APP, transport_driver) of
-        {ok, tcp} ->
-            {tcp, gen_rpc_driver_tcp, tcp_closed, tcp_error};
-        {ok, ssl} ->
-            {ssl, gen_rpc_driver_ssl, ssl_closed, ssl_error}
+    {ok, Driver} = application:get_env(?APP, transport_driver),
+    get_transport_driver_data_tuple(Driver).
+
+-spec get_transport_driver_per_node(atom()) -> tuple().
+get_transport_driver_per_node(Node) ->
+    {ok, Nodes} = application:get_env(?APP, transport_driver_per_node),
+    case maps:find(Node, Nodes) of
+        error ->
+            get_transport_driver();
+        {ok, Driver} ->
+            get_transport_driver_data_tuple(Driver)
     end.
 
 %% Retrieves the specific TCP server port
--spec get_remote_port(atom()) -> inet:port_number().
-get_remote_port(Node) ->
-    {ok, Ports} = application:get_env(?APP, remote_ports),
+-spec get_port_per_node(atom()) -> inet:port_number().
+get_port_per_node(Node) ->
+    {ok, Ports} = application:get_env(?APP, port_per_node),
     case maps:find(Node, Ports) of
         error ->
             {ok, Port} = application:get_env(?APP, port),
@@ -161,3 +177,19 @@ get_inactivity_timeout(gen_rpc_acceptor) ->
 get_async_call_inactivity_timeout() ->
     {ok, TTL} = application:get_env(?APP, async_call_inactivity_timeout),
     TTL.
+
+%%% ===================================================
+%%% Private functions
+%%% ===================================================
+%% Returns the proper transport driver tuple
+get_transport_driver_data_tuple(tcp) ->
+    {tcp, gen_rpc_driver_tcp, tcp_closed, tcp_error};
+
+get_transport_driver_data_tuple(ssl) ->
+    {ssl, gen_rpc_driver_ssl, ssl_closed, ssl_error}.
+
+hybrid_proplist_compare({K1,_V1}, {K2,_V2}) ->
+    K1 =< K2;
+
+hybrid_proplist_compare(K1, K2) ->
+    K1 =< K2.

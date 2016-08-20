@@ -24,10 +24,12 @@
     {env,[
         %% Choose between TCP and SSL transport drivers
         {transport_driver, tcp},
+        %% Fine-graned transport driver control
+        {transport_driver_per_node, #{}},
         %% Default port
         {port, 5369},
         %% Map of nodes listen to a different data port
-        {remote_ports, #{}},
+        {port_per_node, #{}},
         %% List of modules available for RPC
         %% This is either whitelist, blacklist or undefined
         %% to disable the feature

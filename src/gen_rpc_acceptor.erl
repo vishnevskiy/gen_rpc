@@ -136,10 +136,10 @@ waiting_for_data(info, {Driver,Socket,Data},
     %% the data
     try erlang:binary_to_term(Data) of
         {{CallType,M,F,A}, Caller} when CallType =:= call; CallType =:= async_call ->
-            {VsnAllowed, RealM} = check_module_version(M),
+            {ModVsnAllowed, RealM} = check_module_version(M),
             case check_if_allowed(RealM, Control, List) of
                 true ->
-                    case VsnAllowed of
+                    case ModVsnAllowed of
                         true ->
                             WorkerPid = erlang:spawn(?MODULE, call_worker, [self(), CallType, RealM, F, A, Caller]),
                             ok = lager:debug("event=call_received driver=~s socket=\"~p\" peer=\"~s\" caller=\"~p\" worker_pid=\"~p\"",
@@ -159,10 +159,10 @@ waiting_for_data(info, {Driver,Socket,Data},
                     waiting_for_data(info, {CallType, Caller, {badrpc,unauthorized}}, State)
             end;
         {cast, M, F, A} ->
-            {VsnAllowed, RealM} = check_module_version(M),
+            {ModVsnAllowed, RealM} = check_module_version(M),
             _Result = case check_if_allowed(RealM, Control, List) of
                 true ->
-                    case VsnAllowed of
+                    case ModVsnAllowed of
                         true ->
                             ok = lager:debug("event=cast_received driver=~s socket=\"~p\" peer=\"~s\" module=~s function=~s args=\"~p\"",
                                              [Driver, Socket, gen_rpc_helper:peer_to_string(Peer), RealM, F, A]),

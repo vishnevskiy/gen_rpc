@@ -18,7 +18,7 @@
         {sasl, error_logger_mf_dir, false},
         {gen_rpc, connect_timeout, 500},
         {gen_rpc, send_timeout, 500},
-        {gen_rpc, remote_ports, #{
+        {gen_rpc, port_per_node, #{
             ?MASTER => 5369,
             ?SLAVE => 5370
         }},

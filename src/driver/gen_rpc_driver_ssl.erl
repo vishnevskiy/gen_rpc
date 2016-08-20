@@ -6,7 +6,7 @@
 %%% Original concept inspired and some code copied from
 %%% https://erlangcentral.org/wiki/index.php?title=Building_a_Non-blocking_TCP_server_using_OTP_principles
 
--module(gen_rpc_driver_tcp).
+-module(gen_rpc_driver_ssl).
 -author("Panagiotis Papadomitsos <pj@ezgr.net>").
 
 %%% Behaviour
@@ -14,8 +14,8 @@
 
 %%% Include this library's name macro
 -include("app.hrl").
-%%% Include TCP macros
--include("tcp.hrl").
+%%% Include SSL macros
+-include("ssl.hrl").
 %%% Include helpful guard macros
 -include("guards.hrl").
 
@@ -54,16 +54,17 @@ connect(Node) when is_atom(Node) ->
 
 -spec listen(inet:port_number()) -> {ok, port()} | {error, term()}.
 listen(Port) when is_integer(Port) ->
-    gen_tcp:listen(Port, ?TCP_DEFAULT_OPTS).
+    SslOpts = merge_ssl_options(server, undefined),
+    ssl:listen(Port, SslOpts).
 
 -spec activate(port()) -> ok.
 activate(Socket) when is_port(Socket) ->
-    ok = inet:setopts(Socket, [{active,once}]),
+    ok = ssl:setopts(Socket, [{active,once}]),
     ok.
 
 -spec send(port(), binary()) -> ok | {error, term()}.
 send(Socket, Data) when is_port(Socket), is_binary(Data) ->
-    case gen_tcp:send(Socket, Data) of
+    case ssl:send(Socket, Data) of
         {error, timeout} ->
             ok = lager:error("event=send_data_failed socket=\"~p\" reason=\"timeout\"", [Socket]),
             {error, {badtcp,send_timeout}};
@@ -105,7 +106,8 @@ connect_to_server(Node) ->
     Host = gen_rpc_helper:host_from_node(Node),
     Port = gen_rpc_helper:get_port_per_node(Node),
     ConnTO = gen_rpc_helper:get_connect_timeout(),
-    case gen_tcp:connect(Host, Port, ?TCP_DEFAULT_OPTS, ConnTO) of
+    SslOpts = merge_ssl_options(client, Node),
+    case ssl:connect(Host, Port, SslOpts, ConnTO) of
         {ok, Socket} ->
             ok = lager:debug("event=connect_to_remote_server peer=\"~s\" socket=\"~p\" result=success", [Node, Socket]),
             {ok, Socket};
@@ -120,14 +122,14 @@ authenticate_to_server(Socket) ->
     SendTO = gen_rpc_helper:get_send_timeout(undefined),
     RecvTO = gen_rpc_helper:get_call_receive_timeout(undefined),
     ok = set_send_timeout(Socket, SendTO),
-    case gen_tcp:send(Socket, Packet) of
+    case ssl:send(Socket, Packet) of
         {error, Reason} ->
             ok = lager:error("event=authentication_connection_failed socket=\"~p\" reason=\"~p\"", [Socket, Reason]),
-            ok = gen_tcp:close(Socket),
+            ok = ssl:close(Socket),
             {error, Reason};
         ok ->
             ok = lager:debug("event=authentication_connection_succeeded socket=\"~p\"", [Socket]),
-            case gen_tcp:recv(Socket, 0, RecvTO) of
+            case ssl:recv(Socket, 0, RecvTO) of
                 {ok, RecvPacket} ->
                     case erlang:binary_to_term(RecvPacket) of
                         gen_rpc_connection_authenticated ->
@@ -135,16 +137,27 @@ authenticate_to_server(Socket) ->
                             ok;
                         {gen_rpc_connection_rejected, invalid_cookie} ->
                             ok = lager:error("event=authentication_rejected socket=\"~p\" reason=\"invalid_cookie\"", [Socket]),
-                            ok = gen_tcp:close(Socket),
+                            ok = ssl:close(Socket),
                             {error, invalid_cookie};
                         _Else ->
                             ok = lager:error("event=authentication_reception_error socket=\"~p\" reason=\"invalid_payload\"", [Socket]),
-                            ok = gen_tcp:close(Socket),
+                            ok = ssl:close(Socket),
                             {error, invalid_message}
                     end;
                 {error, Reason} ->
                     ok = lager:error("event=authentication_reception_failed socket=\"~p\" reason=\"~p\"", [Socket, Reason]),
-                    ok = gen_tcp:close(Socket),
+                    ok = ssl:close(Socket),
                     {error, Reason}
             end
     end.
+
+merge_ssl_options(client, Node) ->
+    {ok, ExtraOpts} = application:get_env(?APP, ssl_client_options),
+    DefaultOpts = lists:append(?SSL_DEFAULT_COMMON_OPTS, ?SSL_DEFAULT_CLIENT_OPTS),
+    VerifyOpts = [{verify_fun, {fun ssl_verify_hostname:verify_fun/3,[{check_hostname,Node}]}}|DefaultOpts],
+    gen_rpc_helper:merge_sockopt_lists(ExtraOpts, VerifyOpts);
+
+merge_ssl_options(server, Node) ->
+    {ok, ExtraOpts} = application:get_env(?APP, ssl_server_options),
+    DefaultOpts = lists:append(?SSL_DEFAULT_COMMON_OPTS, ?SSL_DEFAULT_SERVER_OPTS),
+    gen_rpc_helper:merge_sockopt_lists(ExtraOpts, DefaultOpts).

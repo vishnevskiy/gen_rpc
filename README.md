@@ -162,7 +162,7 @@ For more information on what the functions below do, run `erl -man rpc`.
 
 - `port`: The port in which the TCP listener service listens for incoming client requests.
 
-- `remote_ports`: A map with the nodes that run on alternative `port` configuration and the port
+- `port_per_node`: A map with the nodes that run on alternative `port` configuration and the port
   they have configured `gen_rpc` to listen to. Useful when running multiple nodes on the same system and you get port clashes.
 
 - `rpc_module_control`: Set it to `blacklist` to define a list of modules that will not be exposed to `gen_rpc` or to `whitelist`
