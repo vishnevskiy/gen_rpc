@@ -22,9 +22,11 @@
 %%% Public API
 -export([connect/1,
         listen/1,
-        activate/1,
         get_peer/1,
         send/2,
+        activate_socket/1,
+        authenticate_server/1,
+        authenticate_client/3,
         copy_sock_opts/2,
         set_controlling_process/2,
         set_send_timeout/2,
@@ -36,28 +38,24 @@
 %% Connect to a node
 -spec connect(atom()) -> {ok, port()} | {error, term()}.
 connect(Node) when is_atom(Node) ->
-    case connect_to_server(Node) of
+    Host = gen_rpc_helper:host_from_node(Node),
+    Port = gen_rpc_helper:get_port_per_node(Node),
+    ConnTO = gen_rpc_helper:get_connect_timeout(),
+    case gen_tcp:connect(Host, Port, ?TCP_DEFAULT_OPTS, ConnTO) of
         {ok, Socket} ->
-            case authenticate_to_server(Socket) of
-                ok ->
-                    {ok, Socket};
-                {error, invalid_cookie} ->
-                    {error, {badrpc,invalid_cookie}};
-                {error, Reason} ->
-                    {error, {badtcp,Reason}}
-            end;
+            ok = lager:debug("event=connect_to_remote_server peer=\"~s\" socket=\"~p\" result=success", [Node, Socket]),
+            {ok, Socket};
         {error, Reason} ->
-            %% This should be badtcp but to conform with
-            %% the RPC library we return badrpc
-            {error, {badrpc,Reason}}
+            ok = lager:error("event=connect_to_remote_server peer=\"~s\" result=failure reason=\"~p\"", [Node, Reason]),
+            {error, {badtcp,Reason}}
     end.
 
 -spec listen(inet:port_number()) -> {ok, port()} | {error, term()}.
 listen(Port) when is_integer(Port) ->
     gen_tcp:listen(Port, ?TCP_DEFAULT_OPTS).
 
--spec activate(port()) -> ok.
-activate(Socket) when is_port(Socket) ->
+-spec activate_socket(port()) -> ok.
+activate_socket(Socket) when is_port(Socket) ->
     ok = inet:setopts(Socket, [{active,once}]),
     ok.
 
@@ -73,6 +71,84 @@ send(Socket, Data) when is_port(Socket), is_binary(Data) ->
         ok ->
             ok = lager:debug("event=send_data_succeeded socket=\"~p\"", [Socket]),
             ok
+    end.
+
+%% Authenticate to a server
+-spec authenticate_server(port()) -> ok | {error, {badtcp | badrpc, term()}}.
+authenticate_server(Socket) ->
+    Cookie = erlang:get_cookie(),
+    Packet = erlang:term_to_binary({gen_rpc_authenticate_connection, Cookie}),
+    SendTO = gen_rpc_helper:get_send_timeout(undefined),
+    RecvTO = gen_rpc_helper:get_call_receive_timeout(undefined),
+    ok = set_send_timeout(Socket, SendTO),
+    case gen_tcp:send(Socket, Packet) of
+        {error, Reason} ->
+            ok = lager:error("event=authentication_connection_failed socket=\"~p\" reason=\"~p\"", [Socket, Reason]),
+            ok = gen_tcp:close(Socket),
+            {error, {badtcp,Reason}};
+        ok ->
+            ok = lager:debug("event=authentication_connection_succeeded socket=\"~p\"", [Socket]),
+            case gen_tcp:recv(Socket, 0, RecvTO) of
+                {ok, RecvPacket} ->
+                    case erlang:binary_to_term(RecvPacket) of
+                        gen_rpc_connection_authenticated ->
+                            ok = lager:debug("event=connection_authenticated socket=\"~p\"", [Socket]),
+                            ok;
+                        {gen_rpc_connection_rejected, invalid_cookie} ->
+                            ok = lager:error("event=authentication_rejected socket=\"~p\" reason=\"invalid_cookie\"", [Socket]),
+                            ok = gen_tcp:close(Socket),
+                            {error, {badrpc,invalid_cookie}};
+                        _Else ->
+                            ok = lager:error("event=authentication_reception_error socket=\"~p\" reason=\"invalid_payload\"", [Socket]),
+                            ok = gen_tcp:close(Socket),
+                            {error, {badrpc,invalid_message}}
+                    end;
+                {error, Reason} ->
+                    ok = lager:error("event=authentication_reception_failed socket=\"~p\" reason=\"~p\"", [Socket, Reason]),
+                    ok = gen_tcp:close(Socket),
+                    {error, {badtcp,Reason}}
+            end
+    end.
+
+%% Authenticate a connected client
+-spec authenticate_client(port(), tuple(), binary()) -> ok | {error, {badtcp | badrpc, term()}}.
+authenticate_client(Socket, Peer, Data) ->
+    Cookie = erlang:get_cookie(),
+    try erlang:binary_to_term(Data) of
+        {gen_rpc_authenticate_connection, Cookie} ->
+            Packet = erlang:term_to_binary(gen_rpc_connection_authenticated),
+            Result = case send(Socket, Packet) of
+                {error, Reason} ->
+                    ok = lager:error("event=transmission_failed socket=\"~p\" peer=\"~s\" reason=\"~p\"",
+                                     [Socket, gen_rpc_helper:peer_to_string(Peer), Reason]),
+                    {error, {badtcp,Reason}};
+                ok ->
+                    ok = lager:debug("event=transmission_succeeded socket=\"~p\" peer=\"~s\"",
+                                     [Socket, gen_rpc_helper:peer_to_string(Peer)]),
+                    ok = activate_socket(Socket),
+                    ok
+            end,
+            Result;
+        {gen_rpc_authenticate_connection, _IncorrectCookie} ->
+            ok = lager:error("event=invalid_cookie_received socket=\"~p\" peer=\"~s\"",
+                             [Socket, gen_rpc_helper:peer_to_string(Peer)]),
+            Packet = erlang:term_to_binary({gen_rpc_connection_rejected, invalid_cookie}),
+            ok = case send(Socket, Packet) of
+                {error, Reason} ->
+                    ok = lager:error("event=transmission_failed socket=\"~p\" peer=\"~s\" reason=\"~p\"",
+                                     [Socket, gen_rpc_helper:peer_to_string(Peer), Reason]);
+                ok ->
+                    ok = lager:debug("event=transmission_succeeded socket=\"~p\" peer=\"~s\"",
+                                     [Socket, gen_rpc_helper:peer_to_string(Peer)])
+            end,
+            {error, {badrpc,invalid_cookie}};
+        OtherData ->
+            ok = lager:debug("event=erroneous_data_received socket=\"~p\" peer=\"~s\" data=\"~p\"",
+                             [Socket, gen_rpc_helper:peer_to_string(Peer), OtherData]),
+            {error, {badrpc,erroneous_data}}
+    catch
+        error:badarg ->
+            {error, {badtcp,corrupt_data}}
     end.
 
 -spec copy_sock_opts(port(), port()) -> ok | {error, any()}.
@@ -101,50 +177,3 @@ set_acceptor_opts(Socket) when is_port(Socket) ->
 %%% ===================================================
 %%% Private functions
 %%% ===================================================
-connect_to_server(Node) ->
-    Host = gen_rpc_helper:host_from_node(Node),
-    Port = gen_rpc_helper:get_port_per_node(Node),
-    ConnTO = gen_rpc_helper:get_connect_timeout(),
-    case gen_tcp:connect(Host, Port, ?TCP_DEFAULT_OPTS, ConnTO) of
-        {ok, Socket} ->
-            ok = lager:debug("event=connect_to_remote_server peer=\"~s\" socket=\"~p\" result=success", [Node, Socket]),
-            {ok, Socket};
-        {error, Reason} ->
-            ok = lager:error("event=connect_to_remote_server peer=\"~s\" result=failure reason=\"~p\"", [Node, Reason]),
-            {error, Reason}
-    end.
-
-authenticate_to_server(Socket) ->
-    Cookie = erlang:get_cookie(),
-    Packet = erlang:term_to_binary({gen_rpc_authenticate_connection, Cookie}),
-    SendTO = gen_rpc_helper:get_send_timeout(undefined),
-    RecvTO = gen_rpc_helper:get_call_receive_timeout(undefined),
-    ok = set_send_timeout(Socket, SendTO),
-    case gen_tcp:send(Socket, Packet) of
-        {error, Reason} ->
-            ok = lager:error("event=authentication_connection_failed socket=\"~p\" reason=\"~p\"", [Socket, Reason]),
-            ok = gen_tcp:close(Socket),
-            {error, Reason};
-        ok ->
-            ok = lager:debug("event=authentication_connection_succeeded socket=\"~p\"", [Socket]),
-            case gen_tcp:recv(Socket, 0, RecvTO) of
-                {ok, RecvPacket} ->
-                    case erlang:binary_to_term(RecvPacket) of
-                        gen_rpc_connection_authenticated ->
-                            ok = lager:debug("event=connection_authenticated socket=\"~p\"", [Socket]),
-                            ok;
-                        {gen_rpc_connection_rejected, invalid_cookie} ->
-                            ok = lager:error("event=authentication_rejected socket=\"~p\" reason=\"invalid_cookie\"", [Socket]),
-                            ok = gen_tcp:close(Socket),
-                            {error, invalid_cookie};
-                        _Else ->
-                            ok = lager:error("event=authentication_reception_error socket=\"~p\" reason=\"invalid_payload\"", [Socket]),
-                            ok = gen_tcp:close(Socket),
-                            {error, invalid_message}
-                    end;
-                {error, Reason} ->
-                    ok = lager:error("event=authentication_reception_failed socket=\"~p\" reason=\"~p\"", [Socket, Reason]),
-                    ok = gen_tcp:close(Socket),
-                    {error, Reason}
-            end
-    end.

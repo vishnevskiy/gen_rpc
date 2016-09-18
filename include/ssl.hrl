@@ -32,7 +32,7 @@
         {secure_renegotiate,true},
         {reuse_sessions,true},
         {versions,['tlsv1.2','tlsv1.1','tlsv1']},
-        {verify, verify_peer},
+        {verify,verify_peer},
         {hibernate_after,600000},
         {active,false}]).
 

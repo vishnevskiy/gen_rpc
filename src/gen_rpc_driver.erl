@@ -6,23 +6,27 @@
 
 -module(gen_rpc_driver).
 
--callback connect(atom()) -> {ok, port()} | {error, term()}.
+-callback connect(atom()) -> {ok, term()} | {error, term()}.
 
--callback listen(inet:port_number()) -> {ok, port()} | {error, term()}.
+-callback listen(inet:port_number()) -> {ok, term()} | {error, term()}.
 
--callback activate(port()) -> ok.
+-callback activate_socket(term()) -> ok.
 
--callback send(port(), binary()) -> ok | {error, term()}.
+-callback authenticate_server(term()) -> ok | {error, {badtcp | badrpc, term()}}.
 
--callback get_peer(port()) -> {inet:ip4_address(), inet:port_number()}.
+-callback authenticate_client(term(), tuple(), binary()) -> ok | {error, {badtcp | badrpc, term()}}.
 
--callback copy_sock_opts(port(), port()) -> ok | {error, any()}.
+-callback send(term(), binary()) -> ok | {error, term()}.
 
--callback set_controlling_process(port(), pid()) -> ok | {error, term()}.
+-callback get_peer(term()) -> {inet:ip4_address(), inet:port_number()}.
 
--callback set_send_timeout(port(), timeout() | undefined) -> ok.
+-callback copy_sock_opts(term(), term()) -> ok | {error, any()}.
 
--callback set_acceptor_opts(port()) -> ok.
+-callback set_controlling_process(term(), pid()) -> ok | {error, term()}.
+
+-callback set_send_timeout(term(), timeout() | undefined) -> ok.
+
+-callback set_acceptor_opts(term()) -> ok.
 
 -ifdef(TEST).
 %% Stub function to fool code coverage

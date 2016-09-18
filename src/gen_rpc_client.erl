@@ -223,14 +223,21 @@ init({Node}) ->
     ok = lager:info("event=initializing_client driver=~s node=\"~s\"", [Driver, Node]),
     case DriverMod:connect(Node) of
         {ok, Socket} ->
-            {ok, #state{socket=Socket,
-                        driver=Driver,
-                        driver_mod=DriverMod,
-                        driver_closed=DriverClosed,
-                        driver_error=DriverError}, gen_rpc_helper:get_inactivity_timeout(?MODULE)};
-        {error, Reason} ->
-            ok = lager:error("event=client_connection_failed driver=~s reason=\"~p\"", [Driver, Reason]),
-            {stop, Reason}
+            case DriverMod:authenticate_server(Socket) of
+                ok ->
+                    {ok, #state{socket=Socket,
+                                driver=Driver,
+                                driver_mod=DriverMod,
+                                driver_closed=DriverClosed,
+                                driver_error=DriverError}, gen_rpc_helper:get_inactivity_timeout(?MODULE)};
+                {error, ReasonTuple} ->
+                    ok = lager:error("event=client_authentication_failed driver=~s reason=\"~p\"", [Driver, ReasonTuple]),
+                    {stop, ReasonTuple}
+            end;
+        {error, {_Class,Reason}} ->
+            %% This should be badtcp but to conform with
+            %% the RPC library we return badrpc
+            {stop, {badrpc,Reason}}
     end.
 
 %% This is the actual CALL handler
@@ -245,7 +252,7 @@ handle_call({{call,_M,_F,_A} = PacketTuple, SendTO}, Caller, #state{socket=Socke
         ok ->
             ok = lager:debug("message=call event=transmission_succeeded driver=~s socket=\"~p\" caller=\"~p\"", [Driver, Socket, Caller]),
             %% We need to enable the socket and perform the call only if the call succeeds
-            ok = DriverMod:activate(Socket),
+            ok = DriverMod:activate_socket(Socket),
             {noreply, State, gen_rpc_helper:get_inactivity_timeout(?MODULE)}
     end;
 
@@ -281,7 +288,7 @@ handle_cast({{async_call,_M,_F,_A} = PacketTuple, Caller, Ref}, #state{socket=So
             ok = lager:debug("message=async_call event=transmission_succeeded driver=~s socket=\"~p\" worker_pid=\"~p\" call_ref=\"~p\"",
                              [Driver, Socket, Caller, Ref]),
             %% We need to enable the socket and perform the call only if the call succeeds
-            ok = DriverMod:activate(Socket),
+            ok = DriverMod:activate_socket(Socket),
             %% Reply will be handled from the worker
             {noreply, State, gen_rpc_helper:get_inactivity_timeout(?MODULE)}
     end;
@@ -310,7 +317,7 @@ handle_info({Driver,Socket,Data}, #state{socket=Socket, driver=Driver, driver_mo
             ok = lager:error("event=erroneous_reply_received driver=~s socket=\"~p\" data=\"~p\" action=ignoring",
                              [Driver, Socket, OtherData])
     end,
-    ok = DriverMod:activate(Socket),
+    ok = DriverMod:activate_socket(Socket),
     {noreply, State, gen_rpc_helper:get_inactivity_timeout(?MODULE)};
 
 handle_info({DriverClosed, Socket}, #state{socket=Socket, driver=Driver, driver_closed=DriverClosed} = State) ->
@@ -350,7 +357,7 @@ send_cast(PacketTuple, #state{socket=Socket, driver=Driver, driver_mod=DriverMod
             ok = lager:error("message=cast event=transmission_failed driver=~s socket=\"~p\" reason=\"~p\"", [Driver, Socket, Reason]),
             {stop, Reason, State};
         ok ->
-            ok = if Activate =:= true -> DriverMod:activate(Socket);
+            ok = if Activate =:= true -> DriverMod:activate_socket(Socket);
                true -> ok
             end,
             ok = lager:debug("message=cast event=transmission_succeeded driver=~s socket=\"~p\"", [Driver, Socket]),

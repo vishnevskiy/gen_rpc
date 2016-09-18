@@ -87,47 +87,16 @@ waiting_for_socket({call,From}, {socket_ready,Socket}, #state{driver=Driver, dri
     ok = lager:debug("event=acquiring_socket_ownership driver=~s socket=\"~p\" peer=\"~p\"",
                      [Driver, Socket, gen_rpc_helper:peer_to_string(Peer)]),
     ok = DriverMod:set_acceptor_opts(Socket),
-    ok = DriverMod:activate(Socket),
+    ok = DriverMod:activate_socket(Socket),
     ok = gen_statem:reply(From, ok),
     {next_state, waiting_for_auth, State#state{socket=Socket}}.
 
 waiting_for_auth(info, {Driver,Socket,Data}, #state{socket=Socket, driver=Driver, driver_mod=DriverMod, peer=Peer} = State) ->
-    Cookie = erlang:get_cookie(),
-    try erlang:binary_to_term(Data) of
-        {gen_rpc_authenticate_connection, Cookie} ->
-            Packet = erlang:term_to_binary(gen_rpc_connection_authenticated),
-            Result = case DriverMod:send(Socket, Packet) of
-                {error, Reason} ->
-                    ok = lager:error("event=transmission_failed driver=~s socket=\"~p\" peer=\"~s\" reason=\"~p\"",
-                                     [Driver, Socket, gen_rpc_helper:peer_to_string(Peer), Reason]),
-                    {stop, {badtcp,Reason}, State};
-                ok ->
-                    ok = lager:debug("event=transmission_succeeded driver=~s socket=\"~p\" peer=\"~s\"",
-                                     [Driver, Socket, gen_rpc_helper:peer_to_string(Peer)]),
-                    ok = DriverMod:activate(Socket),
-                    {next_state, waiting_for_data, State}
-            end,
-            Result;
-        {gen_rpc_authenticate_connection, _IncorrectCookie} ->
-            ok = lager:error("event=invalid_cookie_received driver=~s socket=\"~p\" peer=\"~s\"",
-                             [Driver, Socket, gen_rpc_helper:peer_to_string(Peer)]),
-            Packet = erlang:term_to_binary({gen_rpc_connection_rejected, invalid_cookie}),
-            ok = case DriverMod:send(Socket, Packet) of
-                {error, Reason} ->
-                    ok = lager:error("event=transmission_failed driver=~s socket=\"~p\" peer=\"~s\" reason=\"~p\"",
-                                     [Driver, Socket, gen_rpc_helper:peer_to_string(Peer), Reason]);
-                ok ->
-                    ok = lager:debug("event=transmission_succeeded driver=~s socket=\"~p\" peer=\"~s\"",
-                                     [Driver, Socket, gen_rpc_helper:peer_to_string(Peer)])
-            end,
-            {stop, {badrpc,invalid_cookie}, State};
-        OtherData ->
-            ok = lager:debug("event=erroneous_data_received driver=~s socket=\"~p\" peer=\"~s\" data=\"~p\"",
-                             [Driver, Socket, gen_rpc_helper:peer_to_string(Peer), OtherData]),
-            {stop, {badrpc,erroneous_data}, State}
-    catch
-        error:badarg ->
-            {stop, {badtcp,corrupt_data}, State}
+    case DriverMod:authenticate_client(Socket, Peer, Data) of
+        {error, Reason} ->
+            {stop, Reason, State};
+        ok ->
+            {next_state, waiting_for_data, State}
     end.
 
 waiting_for_data(info, {Driver,Socket,Data},
@@ -144,18 +113,18 @@ waiting_for_data(info, {Driver,Socket,Data},
                             WorkerPid = erlang:spawn(?MODULE, call_worker, [self(), CallType, RealM, F, A, Caller]),
                             ok = lager:debug("event=call_received driver=~s socket=\"~p\" peer=\"~s\" caller=\"~p\" worker_pid=\"~p\"",
                                              [Driver, Socket, gen_rpc_helper:peer_to_string(Peer), Caller, WorkerPid]),
-                            ok = DriverMod:activate(Socket),
+                            ok = DriverMod:activate_socket(Socket),
                             {keep_state_and_data, gen_rpc_helper:get_inactivity_timeout(?MODULE)};
                         false ->
                             ok = lager:debug("event=incompatible_module_version driver=~s socket=\"~p\" method=~s module=~s",
                                              [Driver, Socket, CallType, RealM]),
-                            ok = DriverMod:activate(Socket),
+                            ok = DriverMod:activate_socket(Socket),
                             waiting_for_data(info, {CallType, Caller, {badrpc,incompatible}}, State)
                     end;
                 false ->
                     ok = lager:debug("event=request_not_allowed driver=~s socket=\"~p\" control=~s method=~s module=~s",
                                      [Driver, Socket, Control, CallType, RealM]),
-                    ok = DriverMod:activate(Socket),
+                    ok = DriverMod:activate_socket(Socket),
                     waiting_for_data(info, {CallType, Caller, {badrpc,unauthorized}}, State)
             end;
         {cast, M, F, A} ->
@@ -175,13 +144,13 @@ waiting_for_data(info, {Driver,Socket,Data},
                     ok = lager:debug("event=request_not_allowed driver=~s socket=\"~p\" control=~s method=cast module=~s",
                                      [Driver, Socket, Control, RealM])
             end,
-            ok = DriverMod:activate(Socket),
+            ok = DriverMod:activate_socket(Socket),
             {keep_state_and_data, gen_rpc_helper:get_inactivity_timeout(?MODULE)};
         {abcast, Name, Msg} ->
             ok = lager:debug("event=abcast_received driver=~s socket=\"~p\" peer=\"~s\" process=~s message=\"~p\"",
                              [Driver, Socket, gen_rpc_helper:peer_to_string(Peer), Name, Msg]),
             Msg = erlang:send(Name, Msg),
-            ok = DriverMod:activate(Socket),
+            ok = DriverMod:activate_socket(Socket),
             {keep_state_and_data, gen_rpc_helper:get_inactivity_timeout(?MODULE)};
         {sbcast, Name, Msg, Caller} ->
             ok = lager:debug("event=sbcast_received driver=~s socket=\"~p\" peer=\"~s\" process=~s message=\"~p\"",
@@ -190,7 +159,7 @@ waiting_for_data(info, {Driver,Socket,Data},
                 undefined -> error;
                 Pid -> Msg = erlang:send(Pid, Msg), success
             end,
-            ok = DriverMod:activate(Socket),
+            ok = DriverMod:activate_socket(Socket),
             waiting_for_data(info, {sbcast, Caller, Reply}, State);
         OtherData ->
             ok = lager:debug("event=erroneous_data_received driver=~s socket=\"~p\" peer=\"~s\" data=\"~p\"",
