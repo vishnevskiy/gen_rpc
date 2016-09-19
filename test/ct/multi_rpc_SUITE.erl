@@ -34,7 +34,7 @@ end_per_suite(_Config) ->
 init_per_testcase(sbcast_with_bad_server, Config) ->
     ok = gen_rpc_test_helper:restart_application(),
     ok = gen_rpc_test_helper:set_application_environment(),
-    ok = gen_rpc_test_helper:start_slave(?SLAVE, 5370),
+    ok = gen_rpc_test_helper:start_slave(?SLAVE, 5370, tcp),
     %% Set a low sbcast timeout
     ok = rpc:call(?SLAVE, application, set_env, [?APP, sbcast_receive_timeout, 500]),
     Config;
@@ -43,7 +43,7 @@ init_per_testcase(_OtherTest, Config) ->
     ok = gen_rpc_test_helper:restart_application(),
     ok = gen_rpc_test_helper:set_application_environment(),
     %% In order to connect to the slave
-    ok = gen_rpc_test_helper:start_slave(?SLAVE, 5370),
+    ok = gen_rpc_test_helper:start_slave(?SLAVE, 5370, tcp),
     Config.
 
 end_per_testcase(_OtherTest, Config) ->

@@ -51,7 +51,7 @@ init_per_testcase(async_call_inexistent_node, Config) ->
 init_per_testcase(remote_node_call, Config) ->
     ok = gen_rpc_test_helper:restart_application(),
     ok = gen_rpc_test_helper:set_application_environment(),
-    ok = gen_rpc_test_helper:start_slave(?SLAVE, 5370),
+    ok = gen_rpc_test_helper:start_slave(?SLAVE, 5370, tcp),
     Config;
 
 init_per_testcase(rpc_module_whitelist, Config) ->

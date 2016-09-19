@@ -79,7 +79,6 @@ endif
 
 integration: image
 	@export NODES=$(NODES) && cd test/integration && bash -c "./integration-tests.sh $(NODES)"
-
 endif
 
 # =============================================================================
@@ -90,7 +89,7 @@ all: $(REBAR)
 	@REBAR_PROFILE=dev $(REBAR) do compile
 
 test: $(REBAR) epmd
-	@REBAR_PROFILE=test $(REBAR) do ct -c, cover
+	@REBAR_PROFILE=test $(REBAR) do ct -c,cover
 
 dialyzer: $(REBAR) $(PLT_FILE)
 	@REBAR_PROFILE=dev $(REBAR) do dialyzer

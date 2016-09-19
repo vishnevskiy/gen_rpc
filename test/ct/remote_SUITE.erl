@@ -17,41 +17,58 @@
 %%% CT callback functions
 %%% ===================================================
 all() ->
-    gen_rpc_test_helper:get_test_functions(?MODULE).
+    [{group, tcp}, {group, ssl}].
+    % [{group, tcp}].
 
-init_per_suite(Config) ->
+groups() ->
+    Cases = gen_rpc_test_helper:get_test_functions(?MODULE),
+    % [{tcp, [], Cases}].
+    [{tcp, [], Cases}, {ssl, [], Cases}].
+
+init_per_group(Group, Config) ->
+    % Our group name is the name of the driver
+    Driver = Group,
     %% Starting Distributed Erlang on local node
     {ok, _Pid} = gen_rpc_test_helper:start_distribution(?MASTER),
     %% Setup application logging
     ok = gen_rpc_test_helper:set_application_environment(),
+    %% Setup socket driver
+    ok = gen_rpc_test_helper:set_driver_configuration(Driver, ?MASTER),
     %% Starting the application locally
     {ok, _MasterApps} = application:ensure_all_started(?APP),
-    Config.
+    %% Save the driver in the state
+    gen_rpc_test_helper:store_driver_in_config(Driver, Config).
 
-end_per_suite(_Config) ->
+end_per_group(_Driver, _Config) ->
     ok.
 
 init_per_testcase(client_inactivity_timeout, Config) ->
     ok = gen_rpc_test_helper:restart_application(),
     ok = gen_rpc_test_helper:set_application_environment(),
+    Driver = gen_rpc_test_helper:get_driver_from_config(Config),
+    ok = gen_rpc_test_helper:set_driver_configuration(Driver, ?MASTER),
     %% In order to connect to the slave
     ok = application:set_env(?APP, client_inactivity_timeout, 500),
-    ok = gen_rpc_test_helper:start_slave(?SLAVE, 5370),
+    ok = gen_rpc_test_helper:start_slave(?SLAVE, 5370, Driver),
     Config;
 
 init_per_testcase(server_inactivity_timeout, Config) ->
     ok = gen_rpc_test_helper:restart_application(),
     ok = gen_rpc_test_helper:set_application_environment(),
+    Driver = gen_rpc_test_helper:get_driver_from_config(Config),
+    ok = gen_rpc_test_helper:set_driver_configuration(Driver, ?MASTER),
     %% In order to connect to the slave
-    ok = gen_rpc_test_helper:start_slave(?SLAVE, 5370),
+    ok = gen_rpc_test_helper:start_slave(?SLAVE, 5370, Driver),
     ok = rpc:call(?SLAVE, application, set_env, [?APP, server_inactivity_timeout, 500]),
     Config;
 
 init_per_testcase(rpc_module_whitelist, Config) ->
     ok = gen_rpc_test_helper:restart_application(),
     ok = gen_rpc_test_helper:set_application_environment(),
+    Driver = gen_rpc_test_helper:get_driver_from_config(Config),
+    ok = gen_rpc_test_helper:set_driver_configuration(Driver, ?MASTER),
     %% In order to connect to the slave
-    ok = gen_rpc_test_helper:start_slave(?SLAVE, 5370),
+    ok = gen_rpc_test_helper:start_slave(?SLAVE, 5370, Driver),
     ok = rpc:call(?SLAVE, application, set_env, [?APP, rpc_module_list, [erlang, os]]),
     ok = rpc:call(?SLAVE, application, set_env, [?APP, rpc_module_control, whitelist]),
     Config;
@@ -59,8 +76,10 @@ init_per_testcase(rpc_module_whitelist, Config) ->
 init_per_testcase(rpc_module_blacklist, Config) ->
     ok = gen_rpc_test_helper:restart_application(),
     ok = gen_rpc_test_helper:set_application_environment(),
+    Driver = gen_rpc_test_helper:get_driver_from_config(Config),
+    ok = gen_rpc_test_helper:set_driver_configuration(Driver, ?MASTER),
     %% In order to connect to the slave
-    ok = gen_rpc_test_helper:start_slave(?SLAVE, 5370),
+    ok = gen_rpc_test_helper:start_slave(?SLAVE, 5370, Driver),
     ok = rpc:call(?SLAVE, application, set_env, [?APP, rpc_module_list, [erlang, os]]),
     ok = rpc:call(?SLAVE, application, set_env, [?APP, rpc_module_control, blacklist]),
     Config;
@@ -68,8 +87,10 @@ init_per_testcase(rpc_module_blacklist, Config) ->
 init_per_testcase(_OtherTest, Config) ->
     ok = gen_rpc_test_helper:restart_application(),
     ok = gen_rpc_test_helper:set_application_environment(),
+    Driver = gen_rpc_test_helper:get_driver_from_config(Config),
+    ok = gen_rpc_test_helper:set_driver_configuration(Driver, ?MASTER),
     %% In order to connect to the slave
-    ok = gen_rpc_test_helper:start_slave(?SLAVE, 5370),
+    ok = gen_rpc_test_helper:start_slave(?SLAVE, 5370, Driver),
     Config.
 
 end_per_testcase(client_inactivity_timeout, Config) ->

@@ -14,6 +14,8 @@
 -define(SLAVE, 'gen_rpc_slave@127.0.0.1').
 -define(FAKE_NODE, 'fake_node@1.2.3.4').
 
+-define(DEFAULT_DRIVER, tcp).
+
 -define(TEST_APPLICATION_ENV, [{sasl, errlog_type, error},
         {sasl, error_logger_mf_dir, false},
         {gen_rpc, connect_timeout, 500},

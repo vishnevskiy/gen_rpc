@@ -12,9 +12,12 @@
 
 %%% Public API
 -export([start_distribution/1,
-        start_slave/2,
+        start_slave/3,
+        set_driver_configuration/2,
         set_application_environment/0,
         set_application_environment/1,
+        store_driver_in_config/2,
+        get_driver_from_config/1,
         get_test_functions/1,
         make_process_name/1,
         make_process_name/2,
@@ -40,7 +43,7 @@ start_distribution(Node)->
             {error, Reason}
     end.
 
-start_slave(Slave, Port) ->
+start_slave(Slave, Port, Driver) ->
     %% Starting a slave node with Distributed Erlang
     SlaveStr = atom_to_list(Slave),
     [NameStr, IpStr] = string:tokens(SlaveStr, [$@]),
@@ -48,6 +51,7 @@ start_slave(Slave, Port) ->
     {ok, _Slave} = slave:start(IpStr, Name, "+K true -gen_rpc port " ++ integer_to_list(Port)),
     ok = rpc:call(Slave, code, add_pathsz, [code:get_path()]),
     ok = set_application_environment(Slave),
+    ok = set_driver_configuration(Driver, Slave),
     %% Start the application remotely
     {ok, _SlaveApps} = rpc:call(Slave, application, ensure_all_started, [?APP]),
     ok.
@@ -59,17 +63,38 @@ stop_slave(Slave) ->
 set_application_environment() ->
     set_application_environment(node()).
 
-set_application_environment(Node) when is_atom(Node) ->
+set_application_environment(Node) ->
     ok = lists:foreach(fun({Application, Key, Value}) ->
         ok = rpc:call(Node, application, set_env, [Application, Key, Value, [{persistent, true}]])
     end, ?TEST_APPLICATION_ENV),
     ok.
 
+set_driver_configuration(ssl, Node) ->
+
+    CertFile = filename:join(["..", "..", "..", "priv", "ssl", atom_to_list(Node)]),
+    CaFile = filename:join(["..", "..", "..", "priv", "ssl", "ca.cert.pem"]),
+    ok = rpc:call(Node, application, set_env, [gen_rpc, transport_driver, ssl]),
+    ok = rpc:call(Node, application, set_env, [gen_rpc, ssl_client_options, [
+                  {certfile, CertFile ++ ".cert.pem"},
+                  {keyfile, CertFile ++ ".key.pem"},
+                  {cacertfile, CaFile}], [{persistent, true}]]),
+    ok = rpc:call(Node, application, set_env, [gen_rpc, ssl_server_options, [
+                  {certfile, CertFile ++ ".cert.pem"},
+                  {keyfile, CertFile ++ ".key.pem"},
+                  {cacertfile, CaFile}], [{persistent, true}]]),
+    ok;
+
+set_driver_configuration(tcp, _Node) ->
+    ok.
+
+store_driver_in_config(Driver, State) ->
+    lists:keystore(driver, 1, State, {driver,Driver}).
+
 restart_application() ->
     _ = application:stop(?APP),
     _ = application:unload(?APP),
     ok = timer:sleep(100),
-    ok = application:start(?APP),
+    {ok, _Apps} = application:ensure_all_started(?APP),
     ok.
 
 get_test_functions(Module) ->
@@ -94,6 +119,12 @@ get_test_functions(Module) ->
                                    ({_,1}) -> true;
                                    ({_,_}) -> false
                                end, Functions)].
+
+get_driver_from_config(Config) ->
+    case lists:keyfind(driver, 1, Config) of
+        false -> ?DEFAULT_DRIVER;
+        {driver, Driver} -> Driver
+    end.
 
 make_process_name(Tag) ->
     make_process_name(node(), Tag).
