@@ -18,6 +18,7 @@
 
 -define(TEST_APPLICATION_ENV, [{sasl, errlog_type, error},
         {sasl, error_logger_mf_dir, false},
+        {gen_rpc, transport_driver, tcp},
         {gen_rpc, connect_timeout, 500},
         {gen_rpc, send_timeout, 500},
         {gen_rpc, port_per_node, #{

@@ -10,6 +10,8 @@
 
 -callback listen(inet:port_number()) -> {ok, term()} | {error, term()}.
 
+-callback accept(term()) -> ok | {error, term()}.
+
 -callback activate_socket(term()) -> ok.
 
 -callback authenticate_server(term()) -> ok | {error, {badtcp | badrpc, term()}}.

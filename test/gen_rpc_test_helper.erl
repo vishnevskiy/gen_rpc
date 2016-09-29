@@ -13,6 +13,7 @@
 %%% Public API
 -export([start_distribution/1,
         start_slave/3,
+        stop_slave/1,
         set_driver_configuration/2,
         set_application_environment/0,
         set_application_environment/1,
@@ -70,10 +71,14 @@ set_application_environment(Node) ->
     ok.
 
 set_driver_configuration(ssl, Node) ->
-
-    CertFile = filename:join(["..", "..", "..", "priv", "ssl", atom_to_list(Node)]),
-    CaFile = filename:join(["..", "..", "..", "priv", "ssl", "ca.cert.pem"]),
-    ok = rpc:call(Node, application, set_env, [gen_rpc, transport_driver, ssl]),
+    Prefix = case Node of
+        Node -> filename:join(["..", "..", ".."])
+        % Node when Node =:= node() -> filename:join(["..", "..", ".."]);
+        % _Else -> "."
+    end,
+    CertFile = filename:join([Prefix, "priv", "ssl", atom_to_list(Node)]),
+    CaFile = filename:join([Prefix, "priv", "ssl", "ca.cert.pem"]),
+    ok = rpc:call(Node, application, set_env, [gen_rpc, transport_driver, ssl, [{persistent, true}]]),
     ok = rpc:call(Node, application, set_env, [gen_rpc, ssl_client_options, [
                   {certfile, CertFile ++ ".cert.pem"},
                   {keyfile, CertFile ++ ".key.pem"},

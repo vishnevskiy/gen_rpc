@@ -33,7 +33,7 @@
 -export([start_link/1, set_socket/2, stop/1]).
 
 %% gen_statem callbacks
--export([init/1, handle_event/4, terminate/3, code_change/4]).
+-export([init/1, handle_event/4, callback_mode/0, terminate/3, code_change/4]).
 
 %% State machine states
 -export([waiting_for_socket/3, waiting_for_auth/3, waiting_for_data/3]).
@@ -57,7 +57,7 @@ stop(Pid) when is_pid(Pid) ->
 %%% Server functions
 %%% ===================================================
 -spec set_socket(pid(), gen_tcp:socket()) -> ok.
-set_socket(Pid, Socket) when is_pid(Pid), is_port(Socket) ->
+set_socket(Pid, Socket) when is_pid(Pid) ->
     gen_statem:call(Pid, {socket_ready,Socket}, infinity).
 
 %%% ===================================================
@@ -74,22 +74,25 @@ init({Peer}) ->
     end,
     {Driver, DriverMod, DriverClosed, DriverError} = gen_rpc_helper:get_transport_driver(),
     ok = lager:info("event=start driver=~s peer=\"~s\"", [Driver, gen_rpc_helper:peer_to_string(Peer)]),
-    {state_functions, waiting_for_socket, #state{driver=Driver,
-                                                 driver_mod=DriverMod,
-                                                 driver_error=DriverError,
-                                                 driver_closed=DriverClosed,
-                                                 peer=Peer,
-                                                 control=Control,
-                                                 list=ControlList}}.
+    {ok, waiting_for_socket, #state{driver=Driver,
+                                    driver_mod=DriverMod,
+                                    driver_error=DriverError,
+                                    driver_closed=DriverClosed,
+                                    peer=Peer,
+                                    control=Control,
+                                    list=ControlList}}.
+
+callback_mode() ->
+    state_functions.
 
 waiting_for_socket({call,From}, {socket_ready,Socket}, #state{driver=Driver, driver_mod=DriverMod, peer=Peer} = State) ->
     % Now we own the socket
-    ok = lager:debug("event=acquiring_socket_ownership driver=~s socket=\"~p\" peer=\"~p\"",
-                     [Driver, Socket, gen_rpc_helper:peer_to_string(Peer)]),
+    ok = lager:debug("event=acquiring_socket_ownership driver=~s socket=\"~s\" peer=\"~p\"",
+                     [Driver, gen_rpc_helper:socket_to_string(Socket), gen_rpc_helper:peer_to_string(Peer)]),
     ok = DriverMod:set_acceptor_opts(Socket),
     ok = DriverMod:activate_socket(Socket),
     ok = gen_statem:reply(From, ok),
-    {next_state, waiting_for_auth, State#state{socket=Socket}}.
+    {next_state, waiting_for_auth, State#state{socket=Socket}, gen_rpc_helper:get_authentication_timeout()}.
 
 waiting_for_auth(info, {Driver,Socket,Data}, #state{socket=Socket, driver=Driver, driver_mod=DriverMod, peer=Peer} = State) ->
     case DriverMod:authenticate_client(Socket, Peer, Data) of
@@ -97,7 +100,13 @@ waiting_for_auth(info, {Driver,Socket,Data}, #state{socket=Socket, driver=Driver
             {stop, Reason, State};
         ok ->
             {next_state, waiting_for_data, State}
-    end.
+    end;
+
+waiting_for_auth(info, {DriverClosed, Socket} = Msg, #state{socket=Socket, driver_closed=DriverClosed} = State) ->
+    handle_event(info, Msg, waiting_for_auth, State);
+
+waiting_for_auth(info, {DriverError, Socket, _Reason} = Msg, #state{socket=Socket, driver_error=DriverError} = State) ->
+    handle_event(info, Msg, waiting_for_auth, State).
 
 waiting_for_data(info, {Driver,Socket,Data},
                  #state{socket=Socket, driver=Driver, driver_mod=DriverMod, peer=Peer, control=Control, list=List} = State) ->
@@ -111,19 +120,19 @@ waiting_for_data(info, {Driver,Socket,Data},
                     case ModVsnAllowed of
                         true ->
                             WorkerPid = erlang:spawn(?MODULE, call_worker, [self(), CallType, RealM, F, A, Caller]),
-                            ok = lager:debug("event=call_received driver=~s socket=\"~p\" peer=\"~s\" caller=\"~p\" worker_pid=\"~p\"",
-                                             [Driver, Socket, gen_rpc_helper:peer_to_string(Peer), Caller, WorkerPid]),
+                            ok = lager:debug("event=call_received driver=~s socket=\"~s\" peer=\"~s\" caller=\"~p\" worker_pid=\"~p\"",
+                                             [Driver, gen_rpc_helper:socket_to_string(Socket), gen_rpc_helper:peer_to_string(Peer), Caller, WorkerPid]),
                             ok = DriverMod:activate_socket(Socket),
                             {keep_state_and_data, gen_rpc_helper:get_inactivity_timeout(?MODULE)};
                         false ->
-                            ok = lager:debug("event=incompatible_module_version driver=~s socket=\"~p\" method=~s module=~s",
-                                             [Driver, Socket, CallType, RealM]),
+                            ok = lager:debug("event=incompatible_module_version driver=~s socket=\"~s\" method=~s module=~s",
+                                             [Driver, gen_rpc_helper:socket_to_string(Socket), CallType, RealM]),
                             ok = DriverMod:activate_socket(Socket),
                             waiting_for_data(info, {CallType, Caller, {badrpc,incompatible}}, State)
                     end;
                 false ->
-                    ok = lager:debug("event=request_not_allowed driver=~s socket=\"~p\" control=~s method=~s module=~s",
-                                     [Driver, Socket, Control, CallType, RealM]),
+                    ok = lager:debug("event=request_not_allowed driver=~s socket=\"~s\" control=~s method=~s module=~s",
+                                     [Driver, gen_rpc_helper:socket_to_string(Socket), Control, CallType, RealM]),
                     ok = DriverMod:activate_socket(Socket),
                     waiting_for_data(info, {CallType, Caller, {badrpc,unauthorized}}, State)
             end;
@@ -133,28 +142,28 @@ waiting_for_data(info, {Driver,Socket,Data},
                 true ->
                     case ModVsnAllowed of
                         true ->
-                            ok = lager:debug("event=cast_received driver=~s socket=\"~p\" peer=\"~s\" module=~s function=~s args=\"~p\"",
-                                             [Driver, Socket, gen_rpc_helper:peer_to_string(Peer), RealM, F, A]),
+                            ok = lager:debug("event=cast_received driver=~s socket=\"~s\" peer=\"~s\" module=~s function=~s args=\"~p\"",
+                                             [Driver, gen_rpc_helper:socket_to_string(Socket), gen_rpc_helper:peer_to_string(Peer), RealM, F, A]),
                             _Pid = erlang:spawn(RealM, F, A);
                         false ->
-                            ok = lager:debug("event=incompatible_module_version driver=~s socket=\"~p\" module=~s",
-                                             [Driver, Socket, RealM])
+                            ok = lager:debug("event=incompatible_module_version driver=~s socket=\"~s\" module=~s",
+                                             [Driver, gen_rpc_helper:socket_to_string(Socket), RealM])
                     end;
                 false ->
-                    ok = lager:debug("event=request_not_allowed driver=~s socket=\"~p\" control=~s method=cast module=~s",
-                                     [Driver, Socket, Control, RealM])
+                    ok = lager:debug("event=request_not_allowed driver=~s socket=\"~s\" control=~s method=cast module=~s",
+                                     [Driver, gen_rpc_helper:socket_to_string(Socket), Control, RealM])
             end,
             ok = DriverMod:activate_socket(Socket),
             {keep_state_and_data, gen_rpc_helper:get_inactivity_timeout(?MODULE)};
         {abcast, Name, Msg} ->
-            ok = lager:debug("event=abcast_received driver=~s socket=\"~p\" peer=\"~s\" process=~s message=\"~p\"",
-                             [Driver, Socket, gen_rpc_helper:peer_to_string(Peer), Name, Msg]),
+            ok = lager:debug("event=abcast_received driver=~s socket=\"~s\" peer=\"~s\" process=~s message=\"~p\"",
+                             [Driver, gen_rpc_helper:socket_to_string(Socket), gen_rpc_helper:peer_to_string(Peer), Name, Msg]),
             Msg = erlang:send(Name, Msg),
             ok = DriverMod:activate_socket(Socket),
             {keep_state_and_data, gen_rpc_helper:get_inactivity_timeout(?MODULE)};
         {sbcast, Name, Msg, Caller} ->
-            ok = lager:debug("event=sbcast_received driver=~s socket=\"~p\" peer=\"~s\" process=~s message=\"~p\"",
-                             [Driver, Socket, gen_rpc_helper:peer_to_string(Peer), Name, Msg]),
+            ok = lager:debug("event=sbcast_received driver=~s socket=\"~s\" peer=\"~s\" process=~s message=\"~p\"",
+                             [Driver, gen_rpc_helper:socket_to_string(Socket), gen_rpc_helper:peer_to_string(Peer), Name, Msg]),
             Reply = case erlang:whereis(Name) of
                 undefined -> error;
                 Pid -> Msg = erlang:send(Pid, Msg), success
@@ -162,8 +171,8 @@ waiting_for_data(info, {Driver,Socket,Data},
             ok = DriverMod:activate_socket(Socket),
             waiting_for_data(info, {sbcast, Caller, Reply}, State);
         OtherData ->
-            ok = lager:debug("event=erroneous_data_received driver=~s socket=\"~p\" peer=\"~s\" data=\"~p\"",
-                             [Driver, Socket, gen_rpc_helper:peer_to_string(Peer), OtherData]),
+            ok = lager:debug("event=erroneous_data_received driver=~s socket=\"~s\" peer=\"~s\" data=\"~p\"",
+                             [Driver, gen_rpc_helper:socket_to_string(Socket), gen_rpc_helper:peer_to_string(Peer), OtherData]),
             {stop, {badrpc,erroneous_data}, State}
     catch
         error:badarg ->
@@ -174,35 +183,42 @@ waiting_for_data(info, {Driver,Socket,Data},
 waiting_for_data(info, {CallReply,_Caller,_Reply} = Payload, #state{socket=Socket, driver=Driver, driver_mod=DriverMod} = State)
 when CallReply =:= call orelse CallReply =:= async_call orelse CallReply =:= sbcast ->
     Packet = erlang:term_to_binary(Payload),
-    ok = lager:debug("message=call_reply event=call_reply_received driver=~s socket=\"~p\" type=~s", [Driver, Socket, CallReply]),
+    ok = lager:debug("message=call_reply event=call_reply_received driver=~s socket=\"~s\" type=~s", [Driver, gen_rpc_helper:socket_to_string(Socket), CallReply]),
     case DriverMod:send(Socket, Packet) of
         ok ->
-            ok = lager:debug("message=call_reply event=call_reply_sent driver=~s socket=\"~p\"", [Driver, Socket]),
+            ok = lager:debug("message=call_reply event=call_reply_sent driver=~s socket=\"~s\"", [Driver, gen_rpc_helper:socket_to_string(Socket)]),
             {keep_state_and_data, gen_rpc_helper:get_inactivity_timeout(?MODULE)};
         {error, Reason} ->
-            ok = lager:error("message=call_reply event=failed_to_send_call_reply driver=~s socket=\"~p\" reason=\"~p\"",
-                             [Driver, Socket, Reason]),
+            ok = lager:error("message=call_reply event=failed_to_send_call_reply driver=~s socket=\"~s\" reason=\"~p\"",
+                             [Driver, gen_rpc_helper:socket_to_string(Socket), Reason]),
             {stop, Reason, State}
     end;
 
 %% Handle the inactivity timeout gracefully
 waiting_for_data(timeout, _Undefined, #state{socket=Socket, driver=Driver} = State) ->
-    ok = lager:info("message=timeout event=server_inactivity_timeout driver=~s socket=\"~p\" action=stopping", [Driver, Socket]),
-    {stop, normal, State}.
+    ok = lager:info("message=timeout event=server_inactivity_timeout driver=~s socket=\"~s\" action=stopping",
+                    [Driver, gen_rpc_helper:socket_to_string(Socket)]),
+    {stop, normal, State};
+
+waiting_for_data(info, {DriverClosed, Socket} = Msg, #state{socket=Socket, driver_closed=DriverClosed} = State) ->
+    handle_event(info, Msg, waiting_for_data, State);
+
+waiting_for_data(info, {DriverError, Socket, _Reason} = Msg, #state{socket=Socket, driver_error=DriverError} = State) ->
+    handle_event(info, Msg, waiting_for_data, State).
 
 handle_event(info, {DriverClosed, Socket}, _StateName, #state{socket=Socket, driver=Driver, driver_closed=DriverClosed, peer=Peer} = State) ->
-    ok = lager:notice("message=channel_closed driver=~s socket=\"~p\" peer=\"~s\" action=stopping",
-                      [Driver, Socket, gen_rpc_helper:peer_to_string(Peer)]),
+    ok = lager:notice("message=channel_closed driver=~s socket=\"~s\" peer=\"~s\" action=stopping",
+                      [Driver, gen_rpc_helper:socket_to_string(Socket), gen_rpc_helper:peer_to_string(Peer)]),
     {stop, normal, State};
 
 handle_event(info, {DriverError, Socket, Reason}, _StateName, #state{socket=Socket, driver=Driver, driver_error=DriverError, peer=Peer} = State) ->
-    ok = lager:error("message=channel_error driver=~s socket=\"~p\" peer=\"~s\" reason=\"~p\" action=stopping",
-                     [Driver, Socket, gen_rpc_helper:peer_to_string(Peer), Reason]),
+    ok = lager:error("message=channel_error driver=~s socket=\"~s\" peer=\"~s\" reason=\"~p\" action=stopping",
+                     [Driver, gen_rpc_helper:socket_to_string(Socket), gen_rpc_helper:peer_to_string(Peer), Reason]),
     {stop, normal, State};
 
 handle_event(EventType, Event, StateName, #state{socket=Socket, driver=Driver} = State) ->
-    ok = lager:error("event=uknown_event driver=~s socket=\"~p\" event_type=\"~p\" payload=\"~p\" action=stopping",
-                     [Driver, Socket, EventType, Event]),
+    ok = lager:error("event=uknown_event driver=~s socket=\"~s\" event_type=\"~p\" payload=\"~p\" action=stopping",
+                     [Driver, gen_rpc_helper:socket_to_string(Socket), EventType, Event]),
     {stop, {StateName, undefined_event, Event}, State}.
 
 terminate(_Reason, _StateName, _State) ->

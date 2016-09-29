@@ -93,16 +93,22 @@ call(Node, M, F, A, RecvTO, SendTO) when is_atom(Node), is_atom(M) orelse is_tup
                     %% We take care of CALL inside the gen_server
                     %% This is not resilient enough if the caller's mailbox is full
                     %% but it's good enough for now
-                    try gen_server:call(NewPid, {{call,M,F,A}, SendTO}, gen_rpc_helper:get_call_receive_timeout(RecvTO))
-                    catch exit:{timeout,_Reason} -> {badrpc,timeout}
+                    try
+                        gen_server:call(NewPid, {{call,M,F,A}, SendTO}, gen_rpc_helper:get_call_receive_timeout(RecvTO))
+                    catch
+                        exit:{timeout,_Reason} -> {badrpc,timeout};
+                        exit:OtherReason -> {badrpc, {unknown_error, OtherReason}}
                     end;
                 {error, Reason} ->
                     Reason
             end;
         Pid ->
             ok = lager:debug("event=client_process_found pid=\"~p\" server_node=\"~s\"", [Pid, Node]),
-            try gen_server:call(Pid, {{call,M,F,A}, SendTO}, gen_rpc_helper:get_call_receive_timeout(RecvTO))
-            catch exit:{timeout,_Reason} -> {badrpc,timeout}
+            try
+                gen_server:call(Pid, {{call,M,F,A}, SendTO}, gen_rpc_helper:get_call_receive_timeout(RecvTO))
+            catch
+                exit:{timeout,_Reason} -> {badrpc,timeout};
+                exit:OtherReason -> {badrpc, {unknown_error, OtherReason}}
             end
     end.
 
@@ -243,14 +249,17 @@ init({Node}) ->
 %% This is the actual CALL handler
 handle_call({{call,_M,_F,_A} = PacketTuple, SendTO}, Caller, #state{socket=Socket, driver=Driver, driver_mod=DriverMod} = State) ->
     Packet = erlang:term_to_binary({PacketTuple, Caller}),
-    ok = lager:debug("message=call event=constructing_call_term driver=~s socket=\"~p\" caller=\"~p\"", [Driver, Socket, Caller]),
+    ok = lager:debug("message=call event=constructing_call_term driver=~s socket=\"~s\" caller=\"~p\"",
+                     [Driver, gen_rpc_helper:socket_to_string(Socket), Caller]),
     ok = DriverMod:set_send_timeout(Socket, SendTO),
     case DriverMod:send(Socket, Packet) of
         {error, Reason} ->
-            ok = lager:error("message=call event=transmission_failed driver=~s socket=\"~p\" caller=\"~p\" reason=\"~p\"", [Driver, Socket, Caller, Reason]),
+            ok = lager:error("message=call event=transmission_failed driver=~s socket=\"~s\" caller=\"~p\" reason=\"~p\"",
+                             [Driver, gen_rpc_helper:socket_to_string(Socket), Caller, Reason]),
             {stop, Reason, Reason, State};
         ok ->
-            ok = lager:debug("message=call event=transmission_succeeded driver=~s socket=\"~p\" caller=\"~p\"", [Driver, Socket, Caller]),
+            ok = lager:debug("message=call event=transmission_succeeded driver=~s socket=\"~s\" caller=\"~p\"",
+                             [Driver, gen_rpc_helper:socket_to_string(Socket), Caller]),
             %% We need to enable the socket and perform the call only if the call succeeds
             ok = DriverMod:activate_socket(Socket),
             {noreply, State, gen_rpc_helper:get_inactivity_timeout(?MODULE)}
@@ -258,7 +267,8 @@ handle_call({{call,_M,_F,_A} = PacketTuple, SendTO}, Caller, #state{socket=Socke
 
 %% Catch-all for calls - die if we get a message we don't expect
 handle_call(Msg, _Caller, #state{socket=Socket, driver=Driver} = State) ->
-    ok = lager:error("event=uknown_call_received driver=~s socket=\"~p\" message=\"~p\" action=stopping", [Driver, Socket, Msg]),
+    ok = lager:error("event=uknown_call_received driver=~s socket=\"~s\" message=\"~p\" action=stopping",
+                     [Driver, gen_rpc_helper:socket_to_string(Socket), Msg]),
     {stop, {unknown_call, Msg}, {unknown_call, Msg}, State}.
 
 %% This is the actual CAST handler for CAST
@@ -276,17 +286,17 @@ handle_cast({{sbcast,_Name,_Msg,_Caller} = PacketTuple, undefined}, State) ->
 %% This is the actual ASYNC CALL handler
 handle_cast({{async_call,_M,_F,_A} = PacketTuple, Caller, Ref}, #state{socket=Socket, driver=Driver, driver_mod=DriverMod} = State) ->
     Packet = erlang:term_to_binary({PacketTuple, {Caller,Ref}}),
-    ok = lager:debug("message=async_call event=constructing_async_call_term socket=\"~p\" worker_pid=\"~p\" async_call_ref=\"~p\"",
-                     [Socket, Caller, Ref]),
+    ok = lager:debug("message=async_call event=constructing_async_call_term socket=\"~s\" worker_pid=\"~p\" async_call_ref=\"~p\"",
+                     [gen_rpc_helper:socket_to_string(Socket), Caller, Ref]),
     ok = DriverMod:set_send_timeout(Socket, undefined),
     case DriverMod:send(Socket, Packet) of
         {error, Reason} ->
-            ok = lager:error("message=async_call event=transmission_failed driver=~s socket=\"~p\" worker_pid=\"~p\" call_ref=\"~p\" reason=\"~p\"",
-                             [Driver, Socket, Caller, Ref, Reason]),
+            ok = lager:error("message=async_call event=transmission_failed driver=~s socket=\"~s\" worker_pid=\"~p\" call_ref=\"~p\" reason=\"~p\"",
+                             [Driver, gen_rpc_helper:socket_to_string(Socket), Caller, Ref, Reason]),
             {stop, Reason, Reason, State};
         ok ->
-            ok = lager:debug("message=async_call event=transmission_succeeded driver=~s socket=\"~p\" worker_pid=\"~p\" call_ref=\"~p\"",
-                             [Driver, Socket, Caller, Ref]),
+            ok = lager:debug("message=async_call event=transmission_succeeded driver=~s socket=\"~s\" worker_pid=\"~p\" call_ref=\"~p\"",
+                             [Driver, gen_rpc_helper:socket_to_string(Socket), Caller, Ref]),
             %% We need to enable the socket and perform the call only if the call succeeds
             ok = DriverMod:activate_socket(Socket),
             %% Reply will be handled from the worker
@@ -295,47 +305,51 @@ handle_cast({{async_call,_M,_F,_A} = PacketTuple, Caller, Ref}, #state{socket=So
 
 %% Catch-all for casts - die if we get a message we don't expect
 handle_cast(Msg, #state{socket=Socket, driver=Driver} = State) ->
-    ok = lager:error("event=uknown_cast_received driver=~s socket=\"~p\" message=\"~p\" action=stopping", [Driver, Socket, Msg]),
+    ok = lager:error("event=uknown_cast_received driver=~s socket=\"~s\" message=\"~p\" action=stopping",
+                     [Driver, gen_rpc_helper:socket_to_string(Socket), Msg]),
     {stop, {unknown_cast, Msg}, State}.
 
 %% Handle any TCP packet coming in
 handle_info({Driver,Socket,Data}, #state{socket=Socket, driver=Driver, driver_mod=DriverMod} = State) ->
     _Reply = case erlang:binary_to_term(Data) of
         {call, Caller, Reply} ->
-            ok = lager:debug("event=call_reply_received driver=~s socket=\"~p\" caller=\"~p\" action=sending_reply",
-                             [Driver, Socket, Caller]),
+            ok = lager:debug("event=call_reply_received driver=~s socket=\"~s\" caller=\"~p\" action=sending_reply",
+                             [Driver, gen_rpc_helper:socket_to_string(Socket), Caller]),
             gen_server:reply(Caller, Reply);
         {async_call, {Caller, Ref}, Reply} ->
-            ok = lager:debug("event=async_call_reply_received driver=~s socket=\"~p\" caller=\"~p\" action=sending_reply",
-                             [Driver, Socket, Caller]),
+            ok = lager:debug("event=async_call_reply_received driver=~s socket=\"~s\" caller=\"~p\" action=sending_reply",
+                             [Driver, gen_rpc_helper:socket_to_string(Socket), Caller]),
             Caller ! {self(), Ref, async_call, Reply};
         {sbcast, {Caller, Ref, Node}, Reply} ->
-            ok = lager:debug("event=sbcast_reply_received driver=~s socket=\"~p\" caller=\"~p\" reference=\"~p\" action=sending_reply",
-                             [Driver, Socket, Caller, Ref]),
+            ok = lager:debug("event=sbcast_reply_received driver=~s socket=\"~s\" caller=\"~p\" reference=\"~p\" action=sending_reply",
+                             [Driver, gen_rpc_helper:socket_to_string(Socket), Caller, Ref]),
             Caller ! {Ref, Node, Reply};
         OtherData ->
-            ok = lager:error("event=erroneous_reply_received driver=~s socket=\"~p\" data=\"~p\" action=ignoring",
-                             [Driver, Socket, OtherData])
+            ok = lager:error("event=erroneous_reply_received driver=~s socket=\"~s\" data=\"~p\" action=ignoring",
+                             [Driver, gen_rpc_helper:socket_to_string(Socket), OtherData])
     end,
     ok = DriverMod:activate_socket(Socket),
     {noreply, State, gen_rpc_helper:get_inactivity_timeout(?MODULE)};
 
 handle_info({DriverClosed, Socket}, #state{socket=Socket, driver=Driver, driver_closed=DriverClosed} = State) ->
-    ok = lager:error("message=channel_closed driver=~s socket=\"~p\" action=stopping", [Driver, Socket]),
+    ok = lager:error("message=channel_closed driver=~s socket=\"~s\" action=stopping", [Driver, gen_rpc_helper:socket_to_string(Socket)]),
     {stop, normal, State};
 
 handle_info({DriverError, Socket, Reason}, #state{socket=Socket, driver=Driver, driver_error=DriverError} = State) ->
-    ok = lager:error("message=channel_error driver=~s socket=\"~p\" reason=\"~p\" action=stopping", [Driver, Socket, Reason]),
+    ok = lager:error("message=channel_error driver=~s socket=\"~s\" reason=\"~p\" action=stopping",
+                     [Driver, gen_rpc_helper:socket_to_string(Socket), Reason]),
     {stop, normal, State};
 
 %% Handle the inactivity timeout gracefully
 handle_info(timeout, #state{socket=Socket, driver=Driver} = State) ->
-    ok = lager:info("message=timeout event=client_inactivity_timeout driver=~s socket=\"~p\" action=stopping", [Driver, Socket]),
+    ok = lager:info("message=timeout event=client_inactivity_timeout driver=~s socket=\"~s\" action=stopping",
+                    [Driver, gen_rpc_helper:socket_to_string(Socket)]),
     {stop, normal, State};
 
 %% Catch-all for info - our protocol is strict so die!
 handle_info(Msg, #state{socket=Socket, driver=Driver} = State) ->
-    ok = lager:error("event=uknown_message_received driver=~s socket=\"~p\" message=\"~p\" action=stopping", [Driver, Socket, Msg]),
+    ok = lager:error("event=uknown_message_received driver=~s socket=\"~s\" message=\"~p\" action=stopping",
+                     [Driver, gen_rpc_helper:socket_to_string(Socket), Msg]),
     {stop, {unknown_info, Msg}, State}.
 
 %% Stub functions
@@ -350,17 +364,20 @@ terminate(_Reason, _State) ->
 %%% ===================================================
 send_cast(PacketTuple, #state{socket=Socket, driver=Driver, driver_mod=DriverMod} = State, SendTO, Activate) ->
     Packet = erlang:term_to_binary(PacketTuple),
-    ok = lager:debug("event=constructing_cast_term driver=~s socket=\"~p\" cast=\"~p\"", [Driver, Socket, PacketTuple]),
+    ok = lager:debug("event=constructing_cast_term driver=~s socket=\"~s\" cast=\"~p\"",
+                     [Driver, gen_rpc_helper:socket_to_string(Socket), PacketTuple]),
     ok = DriverMod:set_send_timeout(Socket, SendTO),
     case DriverMod:send(Socket, Packet) of
         {error, Reason} ->
-            ok = lager:error("message=cast event=transmission_failed driver=~s socket=\"~p\" reason=\"~p\"", [Driver, Socket, Reason]),
+            ok = lager:error("message=cast event=transmission_failed driver=~s socket=\"~s\" reason=\"~p\"",
+                             [Driver, gen_rpc_helper:socket_to_string(Socket), Reason]),
             {stop, Reason, State};
         ok ->
             ok = if Activate =:= true -> DriverMod:activate_socket(Socket);
                true -> ok
             end,
-            ok = lager:debug("message=cast event=transmission_succeeded driver=~s socket=\"~p\"", [Driver, Socket]),
+            ok = lager:debug("message=cast event=transmission_succeeded driver=~s socket=\"~s\"",
+                             [Driver, gen_rpc_helper:socket_to_string(Socket)]),
             {noreply, State, gen_rpc_helper:get_inactivity_timeout(?MODULE)}
     end.
 

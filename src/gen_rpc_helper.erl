@@ -12,6 +12,7 @@
 
 %%% Public API
 -export([peer_to_string/1,
+        socket_to_string/1,
         host_from_node/1,
         copy_sock_opts/3,
         set_optimal_process_flags/0,
@@ -23,6 +24,7 @@
         get_port_per_node/1,
         get_connect_timeout/0,
         get_send_timeout/1,
+        get_authentication_timeout/0,
         get_call_receive_timeout/1,
         get_sbcast_receive_timeout/0,
         get_control_receive_timeout/0,
@@ -42,6 +44,20 @@ peer_to_string({{A,B,C,D}, Port}) when is_integer(A), is_integer(B), is_integer(
     integer_to_list(Port)]);
 peer_to_string({A,B,C,D} = IpAddress) when is_integer(A), is_integer(B), is_integer(C), is_integer(D) ->
     peer_to_string({IpAddress, 0}).
+
+-spec socket_to_string(term()) -> string().
+socket_to_string(Socket) when is_port(Socket) ->
+    io_lib:format("~p", [Socket]);
+
+socket_to_string(Socket) when is_tuple(Socket) ->
+    case Socket of
+        {sslsocket, _, {TcpSock, _}} ->
+            io_lib:format("~p", [TcpSock]);
+        {sslsocket,{_, TcpSock, _, _}, _} ->
+            io_lib:format("~p", [TcpSock]);
+        _Else ->
+            ssl_socket
+    end.
 
 %% Return the remote Erlang hostname
 -spec host_from_node(node()) -> string().
@@ -142,6 +158,11 @@ get_call_receive_timeout(undefined) ->
 
 get_call_receive_timeout(Else) ->
     Else.
+
+%% Retrieves the default authentication timeout
+get_authentication_timeout() ->
+    {ok, AuthTO} = application:get_env(?APP, authentication_timeout),
+    AuthTO.
 
 %% Returns the default sbcast receive timeout
 -spec get_sbcast_receive_timeout() -> timeout().

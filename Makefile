@@ -89,7 +89,7 @@ all: $(REBAR)
 	@REBAR_PROFILE=dev $(REBAR) do compile
 
 test: $(REBAR) epmd
-	@REBAR_PROFILE=test $(REBAR) do ct -c,cover
+	@REBAR_PROFILE=test $(REBAR) do ct -c, cover
 
 dialyzer: $(REBAR) $(PLT_FILE)
 	@REBAR_PROFILE=dev $(REBAR) do dialyzer
@@ -110,8 +110,13 @@ coveralls: $(COVERDATA)
 # Run targets
 # =============================================================================
 
-shell: $(REBAR) epmd
-	@REBAR_PROFILE=dev $(REBAR) do shell --name gen_rpc@127.0.0.1 --config test/gen_rpc.config
+shell: shell-master
+
+shell-master: $(REBAR) epmd
+	@REBAR_PROFILE=dev $(REBAR) do shell --name gen_rpc_master@127.0.0.1 --config test/gen_rpc.master.config
+
+shell-slave: $(REBAR) epmd
+	@REBAR_PROFILE=dev $(REBAR) do shell --name gen_rpc_slave@127.0.0.1 --config test/gen_rpc.slave.config
 
 # =============================================================================
 # Misc targets

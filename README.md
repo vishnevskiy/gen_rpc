@@ -184,6 +184,10 @@ For more information on what the functions below do, run `erl -man rpc`.
 
 - `async_call_inactivity_timeout`: Inactivity period in **milliseconds** after which a pending process holding an `async_call` return value will exit. This is used for process sanitation purposes so please make sure to set it in a sufficiently high number (or `infinity`).
 
+### SSL Configuration
+
+
+
 ## Architecture
 
 In order to achieve the mailbox-per-node feature, `gen_rpc` uses a very specific architecture:

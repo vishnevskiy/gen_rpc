@@ -10,34 +10,36 @@
 -author("Panagiotis Papadomitsos <pj@ezgr.net>").
 
 %%% Behaviour
--behaviour(gen_server).
+-behaviour(gen_statem).
 
 %%% Include this library's name macro
 -include("app.hrl").
 
 %%% Local state
+%%% Local state
 -record(state, {socket :: port(),
         driver :: atom(),
-        driver_mod :: atom(),
-        acceptor :: prim_inet:insock()}).
+        driver_mod :: atom()}).
 
-%%% Supervisor functions
+%%% Server functions
 -export([start_link/0, stop/0]).
 
-%%% Behaviour callbacks
--export([init/1, handle_call/3, handle_cast/2,
-        handle_info/2, terminate/2, code_change/3]).
+%% gen_statem callbacks
+-export([init/1, handle_event/4, callback_mode/0, terminate/3, code_change/4]).
+
+%% State machine states
+-export([waiting_for_connection/3]).
 
 %%% ===================================================
 %%% Supervisor functions
 %%% ===================================================
--spec start_link() -> gen_sever:startlink_ret().
+-spec start_link() -> gen_statem:startlink_ret().
 start_link() ->
-    gen_server:start_link({local,?MODULE}, ?MODULE, {}, []).
+    gen_statem:start_link({local,?MODULE}, ?MODULE, {}, []).
 
 -spec stop() -> ok.
 stop() ->
-    gen_server:stop(?MODULE, normal, infinity).
+    gen_statem:stop(?MODULE, normal, infinity).
 
 %%% ===================================================
 %%% Behaviour callbacks
@@ -48,59 +50,48 @@ init({}) ->
     {Driver, DriverMod, _ClosedMsg, _ErrorMsg} = gen_rpc_helper:get_transport_driver(),
     case DriverMod:listen(Port) of
         {ok, Socket} ->
-            ok = lager:info("event=server_setup_successfully driver=~s socket=\"~p\"", [Driver, Socket]),
-            {ok, Ref} = prim_inet:async_accept(Socket, -1),
-            {ok, #state{socket=Socket, driver=Driver, driver_mod=DriverMod, acceptor=Ref}};
+            %% Launch a new acceptor with a new accept socket
+            ok = lager:info("event=server_setup_successfully driver=~s socket=\"~s\"", [Driver, gen_rpc_helper:socket_to_string(Socket)]),
+            {ok, waiting_for_connection, #state{socket=Socket, driver=Driver, driver_mod=DriverMod}, {next_event, internal, accept}};
         {error, Reason} ->
             ok = lager:error("event=failed_to_setup_server driver=~s reason=\"~p\"", [Driver, Reason]),
             {stop, Reason}
     end.
 
-%% Catch-all for calls - die if we get a message we don't expect
-handle_call(Msg, _From,  #state{socket=Socket, driver=Driver} = State) ->
-    ok = lager:error("event=unknown_call_received driver=~s socket=\"~p\" message=\"~p\" action=stopping", [Driver, Socket, Msg]),
-    {stop, {unknown_call, Msg}, {unknown_call, Msg}, State}.
+callback_mode() ->
+    state_functions.
 
-%% Catch-all for casts - die if we get a message we don't expect
-handle_cast(Msg, #state{socket=Socket, driver=Driver} = State) ->
-    ok = lager:error("event=unknown_cast_received driver=~s socket=\"~p\" message=\"~p\" action=stopping", [Driver, Socket, Msg]),
-    {stop, {unknown_cast, Msg}, State}.
+waiting_for_connection(internal, accept, #state{socket=ListSock, driver=Driver, driver_mod=DriverMod} = State) ->
+    case DriverMod:accept(ListSock) of
+        {ok, AccSock} ->
+            ok = lager:info("event=client_connection_received driver=~s socket=\"~s\" action=starting_acceptor",
+                            [Driver, gen_rpc_helper:socket_to_string(ListSock)]),
+            Peer = DriverMod:get_peer(AccSock),
+            {ok, AccPid} = gen_rpc_acceptor_sup:start_child(Peer),
+            case DriverMod:copy_sock_opts(ListSock, AccSock) of
+                ok -> ok;
+                {error, Reason} -> exit({set_sock_opt, Reason})
+            end,
+            ok = DriverMod:set_controlling_process(AccSock, AccPid),
+            ok = gen_rpc_acceptor:set_socket(AccPid, AccSock),
+            {keep_state_and_data, {next_event, internal, accept}};
+        {error, Reason} ->
+            ok = lager:error("event=socket_error_event driver=~s socket=\"~s\" event=\"~p\" action=stopping",
+                             [Driver, gen_rpc_helper:socket_to_string(ListSock), Reason]),
+            {stop, {socket_error, Reason}, State}
+    end.
 
-handle_info({inet_async, ListSock, Ref, {ok, AccSock}},
-            #state{socket=ListSock, driver=Driver, driver_mod=DriverMod, acceptor=Ref} = State) ->
-    try
-        ok = lager:info("event=client_connection_received driver=~s socket=\"~p\" action=starting_acceptor", [Driver, ListSock]),
-        Peer = DriverMod:get_peer(AccSock),
-        {ok, AccPid} = gen_rpc_acceptor_sup:start_child(Peer),
-        case DriverMod:copy_sock_opts(ListSock, AccSock) of
-            ok -> ok;
-            {error, Reason} -> exit({set_sock_opt, Reason})
-        end,
-        ok = DriverMod:set_controlling_process(AccSock, AccPid),
-        ok = gen_rpc_acceptor:set_socket(AccPid, AccSock),
-        case prim_inet:async_accept(ListSock, -1) of
-            {ok, NewRef} -> {noreply, State#state{acceptor=NewRef}, hibernate};
-            {error, NewRef} -> exit({async_accept, inet:format_error(NewRef)})
-        end
-    catch
-        exit:ExitReason ->
-            ok = lager:error("message=inet_async event=unknown_error driver=~s socket=\"~p\" error=\"~p\" action=stopping",
-                             [Driver, ListSock, ExitReason]),
-            {stop, ExitReason, State}
-    end;
+handle_event(EventType, Event, StateName, #state{socket=Socket, driver=Driver} = State) ->
+    ok = lager:error("event=uknown_event driver=~s socket=\"~s\" event_type=\"~p\" payload=\"~p\" action=stopping",
+                     [Driver, gen_rpc_helper:socket_to_string(Socket), EventType, Event]),
+    {stop, {StateName, undefined_event, Event}, State}.
 
-%% Handle async socket errors gracefully
-handle_info({inet_async, ListSock, Ref, Error}, #state{socket=ListSock, driver=Driver, acceptor=Ref} = State) ->
-    ok = lager:error("message=inet_async event=listener_error driver=~s socket=\"~p\" error=\"~p\" action=stopping", [Driver, ListSock, Error]),
-    {stop, Error, State};
-
-%% Catch-all for info - our protocol is strict so die!
-handle_info(Msg, #state{socket=Socket, driver=Driver} = State) ->
-    ok = lager:error("event=uknown_message_received driver=~s socket=\"~p\" message=\"~p\" action=stopping", [Driver, Socket, Msg]),
-    {stop, {unknown_message,Msg}, State}.
-
-terminate(_Reason, _State) ->
+terminate(_Reason, _StateName, _State) ->
     ok.
 
-code_change(_OldVsn, State, _Extra) ->
-    {ok, State}.
+code_change(_OldVsn, StateName, State, _Extra) ->
+    {state_functions, StateName, State}.
+
+%%% ===================================================
+%%% Private functions
+%%% ===================================================

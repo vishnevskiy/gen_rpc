@@ -25,6 +25,7 @@
         %% Choose between TCP and SSL transport drivers
         {transport_driver, tcp},
         %% Fine-graned transport driver control
+        %% for each outgoing client connection
         {transport_driver_per_node, #{}},
         %% Default port
         {port, 5369},
@@ -41,6 +42,8 @@
         {connect_timeout, 5000},
         %% Client and Server send timeout
         {send_timeout, 5000},
+        %% Authentication timeout
+        {authentication_timeout, 5000},
         %% Default receive timeout for call() functions
         {call_receive_timeout, 15000},
         %% Default receive timeout for sbcast
