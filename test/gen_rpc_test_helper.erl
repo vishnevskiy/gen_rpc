@@ -53,6 +53,8 @@ start_slave(Slave, Port, Driver) ->
     ok = rpc:call(Slave, code, add_pathsz, [code:get_path()]),
     ok = set_application_environment(Slave),
     ok = set_driver_configuration(Driver, Slave),
+    %% Start lager
+    {ok, _SlaveLApps} = rpc:call(Slave, application, ensure_all_started, [lager]),
     %% Start the application remotely
     {ok, _SlaveApps} = rpc:call(Slave, application, ensure_all_started, [?APP]),
     ok.
@@ -99,6 +101,7 @@ restart_application() ->
     _ = application:stop(?APP),
     _ = application:unload(?APP),
     ok = timer:sleep(100),
+    {ok, _LApps} = application:ensure_all_started(lager),
     {ok, _Apps} = application:ensure_all_started(?APP),
     ok.
 

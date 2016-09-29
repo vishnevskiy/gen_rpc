@@ -20,7 +20,7 @@
         "rebar.config",
         "src"
     ]},
-    {applications, [kernel, stdlib, lager, crypto, asn1, public_key, ssl]},
+    {applications, [kernel, stdlib, crypto, asn1, public_key, ssl]},
     {env,[
         %% Choose between TCP and SSL transport drivers
         {transport_driver, tcp},

@@ -12,6 +12,8 @@
 %%% Behaviour
 -behaviour(gen_statem).
 
+%%% Include the HUT library
+-include_lib("hut/include/hut.hrl").
 %%% Include this library's name macro
 -include("app.hrl").
 
@@ -51,10 +53,10 @@ init({}) ->
     case DriverMod:listen(Port) of
         {ok, Socket} ->
             %% Launch a new acceptor with a new accept socket
-            ok = lager:info("event=server_setup_successfully driver=~s socket=\"~s\"", [Driver, gen_rpc_helper:socket_to_string(Socket)]),
+            ?log(info, "event=server_setup_successfully driver=~s socket=\"~s\"", [Driver, gen_rpc_helper:socket_to_string(Socket)]),
             {ok, waiting_for_connection, #state{socket=Socket, driver=Driver, driver_mod=DriverMod}, {next_event, internal, accept}};
         {error, Reason} ->
-            ok = lager:error("event=failed_to_setup_server driver=~s reason=\"~p\"", [Driver, Reason]),
+            ?log(error, "event=failed_to_setup_server driver=~s reason=\"~p\"", [Driver, Reason]),
             {stop, Reason}
     end.
 
@@ -64,7 +66,7 @@ callback_mode() ->
 waiting_for_connection(internal, accept, #state{socket=ListSock, driver=Driver, driver_mod=DriverMod} = State) ->
     case DriverMod:accept(ListSock) of
         {ok, AccSock} ->
-            ok = lager:info("event=client_connection_received driver=~s socket=\"~s\" action=starting_acceptor",
+            ?log(info, "event=client_connection_received driver=~s socket=\"~s\" action=starting_acceptor",
                             [Driver, gen_rpc_helper:socket_to_string(ListSock)]),
             Peer = DriverMod:get_peer(AccSock),
             {ok, AccPid} = gen_rpc_acceptor_sup:start_child(Peer),
@@ -76,13 +78,13 @@ waiting_for_connection(internal, accept, #state{socket=ListSock, driver=Driver, 
             ok = gen_rpc_acceptor:set_socket(AccPid, AccSock),
             {keep_state_and_data, {next_event, internal, accept}};
         {error, Reason} ->
-            ok = lager:error("event=socket_error_event driver=~s socket=\"~s\" event=\"~p\" action=stopping",
+            ?log(error, "event=socket_error_event driver=~s socket=\"~s\" event=\"~p\" action=stopping",
                              [Driver, gen_rpc_helper:socket_to_string(ListSock), Reason]),
             {stop, {socket_error, Reason}, State}
     end.
 
 handle_event(EventType, Event, StateName, #state{socket=Socket, driver=Driver} = State) ->
-    ok = lager:error("event=uknown_event driver=~s socket=\"~s\" event_type=\"~p\" payload=\"~p\" action=stopping",
+    ?log(error, "event=uknown_event driver=~s socket=\"~s\" event_type=\"~p\" payload=\"~p\" action=stopping",
                      [Driver, gen_rpc_helper:socket_to_string(Socket), EventType, Event]),
     {stop, {StateName, undefined_event, Event}, State}.
 
