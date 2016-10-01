@@ -31,7 +31,7 @@
                   "ECDHE-RSA-AES128-SHA","DHE-DSS-AES128-SHA","ECDH-ECDSA-AES128-SHA","ECDH-RSA-AES128-SHA","AES128-SHA"]},
         {secure_renegotiate,true},
         {reuse_sessions,true},
-        {versions,['tlsv1.2','tlsv1.1','tlsv1']},
+        {versions,['tlsv1.2','tlsv1.1']},
         {verify,verify_peer},
         {hibernate_after,600000},
         {active,false}]).

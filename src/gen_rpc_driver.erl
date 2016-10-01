@@ -6,7 +6,7 @@
 
 -module(gen_rpc_driver).
 
--callback connect(atom()) -> {ok, term()} | {error, term()}.
+-callback connect(atom(), inet:port_number()) -> {ok, term()} | {error, term()}.
 
 -callback listen(inet:port_number()) -> {ok, term()} | {error, term()}.
 

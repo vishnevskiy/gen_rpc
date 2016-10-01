@@ -32,7 +32,7 @@
 -dialyzer([{no_return, [call_middleman/3]}]).
 
 %%% Server functions
--export([start_link/1, set_socket/2, stop/1]).
+-export([start_link/2, set_socket/2, stop/1]).
 
 %% gen_statem callbacks
 -export([init/1, handle_event/4, callback_mode/0, terminate/3, code_change/4]).
@@ -46,10 +46,10 @@
 %%% ===================================================
 %%% Supervisor functions
 %%% ===================================================
--spec start_link({inet:ip4_address(), inet:port_number()}) -> gen_statem:startlink_ret().
-start_link(Peer) when is_tuple(Peer) ->
+-spec start_link(atom(), {inet:ip4_address(), inet:port_number()}) -> gen_statem:startlink_ret().
+start_link(Driver, Peer) when is_atom(Driver), is_tuple(Peer) ->
     Name = gen_rpc_helper:make_process_name("acceptor", Peer),
-    gen_statem:start_link({local,Name}, ?MODULE, {Peer}, []).
+    gen_statem:start_link({local,Name}, ?MODULE, {Driver, Peer}, []).
 
 -spec stop(pid()) -> ok.
 stop(Pid) when is_pid(Pid) ->
@@ -65,16 +65,10 @@ set_socket(Pid, Socket) when is_pid(Pid) ->
 %%% ===================================================
 %%% Behaviour callbacks
 %%% ===================================================
-init({Peer}) ->
+init({Driver, Peer}) ->
     ok = gen_rpc_helper:set_optimal_process_flags(),
-    {Control, ControlList} = case application:get_env(?APP, rpc_module_control) of
-        {ok, undefined} ->
-            {undefined, undefined};
-        {ok, Type} when Type =:= whitelist; Type =:= blacklist ->
-            {ok, List} = application:get_env(?APP, rpc_module_list),
-            {Type, sets:from_list(List)}
-    end,
-    {Driver, DriverMod, DriverClosed, DriverError} = gen_rpc_helper:get_transport_driver(),
+    {Control, ControlList} = gen_rpc_helper:get_rpc_module_control(),
+    {DriverMod, _DriverPort, DriverClosed, DriverError} = gen_rpc_helper:get_server_driver_options(Driver),
     ?log(info, "event=start driver=~s peer=\"~s\"", [Driver, gen_rpc_helper:peer_to_string(Peer)]),
     {ok, waiting_for_socket, #state{driver=Driver,
                                     driver_mod=DriverMod,
@@ -90,7 +84,7 @@ callback_mode() ->
 waiting_for_socket({call,From}, {socket_ready,Socket}, #state{driver=Driver, driver_mod=DriverMod, peer=Peer} = State) ->
     % Now we own the socket
     ?log(debug, "event=acquiring_socket_ownership driver=~s socket=\"~s\" peer=\"~p\"",
-                     [Driver, gen_rpc_helper:socket_to_string(Socket), gen_rpc_helper:peer_to_string(Peer)]),
+         [Driver, gen_rpc_helper:socket_to_string(Socket), gen_rpc_helper:peer_to_string(Peer)]),
     ok = DriverMod:set_acceptor_opts(Socket),
     ok = DriverMod:activate_socket(Socket),
     ok = gen_statem:reply(From, ok),
@@ -104,6 +98,11 @@ waiting_for_auth(info, {Driver,Socket,Data}, #state{socket=Socket, driver=Driver
             {next_state, waiting_for_data, State}
     end;
 
+waiting_for_auth(timeout, _Timeout, #state{socket=Socket, driver=Driver, peer=Peer} = State) ->
+    ?log(notice, "event=timed_out_waiting_for_auth driver=~s socket=\"~s\" peer=\"~s\"",
+         [Driver, gen_rpc_helper:socket_to_string(Socket), gen_rpc_helper:peer_to_string(Peer)]),
+    {stop, timed_out_waiting_for_auth, State};
+
 waiting_for_auth(info, {DriverClosed, Socket} = Msg, #state{socket=Socket, driver_closed=DriverClosed} = State) ->
     handle_event(info, Msg, waiting_for_auth, State);
 
@@ -116,8 +115,8 @@ waiting_for_data(info, {Driver,Socket,Data},
     %% the data
     try erlang:binary_to_term(Data) of
         {{CallType,M,F,A}, Caller} when CallType =:= call; CallType =:= async_call ->
-            {ModVsnAllowed, RealM} = check_module_version(M),
-            case check_if_allowed(RealM, Control, List) of
+            {ModVsnAllowed, RealM} = check_module_version_compat(M),
+            case check_if_module_allowed(RealM, Control, List) of
                 true ->
                     case ModVsnAllowed of
                         true ->
@@ -139,8 +138,8 @@ waiting_for_data(info, {Driver,Socket,Data},
                     waiting_for_data(info, {CallType, Caller, {badrpc,unauthorized}}, State)
             end;
         {cast, M, F, A} ->
-            {ModVsnAllowed, RealM} = check_module_version(M),
-            _Result = case check_if_allowed(RealM, Control, List) of
+            {ModVsnAllowed, RealM} = check_module_version_compat(M),
+            _Result = case check_if_module_allowed(RealM, Control, List) of
                 true ->
                     case ModVsnAllowed of
                         true ->
@@ -159,13 +158,13 @@ waiting_for_data(info, {Driver,Socket,Data},
             {keep_state_and_data, gen_rpc_helper:get_inactivity_timeout(?MODULE)};
         {abcast, Name, Msg} ->
             ?log(debug, "event=abcast_received driver=~s socket=\"~s\" peer=\"~s\" process=~s message=\"~p\"",
-                             [Driver, gen_rpc_helper:socket_to_string(Socket), gen_rpc_helper:peer_to_string(Peer), Name, Msg]),
+                 [Driver, gen_rpc_helper:socket_to_string(Socket), gen_rpc_helper:peer_to_string(Peer), Name, Msg]),
             Msg = erlang:send(Name, Msg),
             ok = DriverMod:activate_socket(Socket),
             {keep_state_and_data, gen_rpc_helper:get_inactivity_timeout(?MODULE)};
         {sbcast, Name, Msg, Caller} ->
             ?log(debug, "event=sbcast_received driver=~s socket=\"~s\" peer=\"~s\" process=~s message=\"~p\"",
-                             [Driver, gen_rpc_helper:socket_to_string(Socket), gen_rpc_helper:peer_to_string(Peer), Name, Msg]),
+                 [Driver, gen_rpc_helper:socket_to_string(Socket), gen_rpc_helper:peer_to_string(Peer), Name, Msg]),
             Reply = case erlang:whereis(Name) of
                 undefined -> error;
                 Pid -> Msg = erlang:send(Pid, Msg), success
@@ -260,18 +259,18 @@ call_middleman(M, F, A) ->
     ok.
 
 %% Check if the function is RPC-enabled
-check_if_allowed(_DriverMod, undefined, _List) ->
+check_if_module_allowed(_DriverMod, disabled, _List) ->
     true;
 
-check_if_allowed(Module, whitelist, List) ->
+check_if_module_allowed(Module, whitelist, List) ->
     sets:is_element(Module, List);
 
-check_if_allowed(Module, blacklist, List) ->
+check_if_module_allowed(Module, blacklist, List) ->
     not sets:is_element(Module, List).
 
 %% Check if the module version called is compatible with the one
 %% requested by the caller
-check_module_version({M, Version}) ->
+check_module_version_compat({M, Version}) ->
     try
         Attrs = M:module_info(attributes),
         {vsn, VsnList} = lists:keyfind(vsn, 1, Attrs),
@@ -292,5 +291,5 @@ check_module_version({M, Version}) ->
             {false, M}
     end;
 
-check_module_version(M) ->
+check_module_version_compat(M) ->
     {true, M}.

@@ -82,8 +82,6 @@ set_driver_configuration(ssl, Node) ->
     CaFile = filename:join([Prefix, "priv", "ssl", "ca.cert.pem"]),
     ok = rpc:call(Node, application, set_env, [gen_rpc, transport_driver, ssl, [{persistent, true}]]),
     ok = rpc:call(Node, application, set_env, [gen_rpc, ssl_client_options, [
-                  {certfile, CertFile ++ ".cert.pem"},
-                  {keyfile, CertFile ++ ".key.pem"},
                   {cacertfile, CaFile}], [{persistent, true}]]),
     ok = rpc:call(Node, application, set_env, [gen_rpc, ssl_server_options, [
                   {certfile, CertFile ++ ".cert.pem"},

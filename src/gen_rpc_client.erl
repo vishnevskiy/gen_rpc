@@ -227,9 +227,10 @@ sbcast(Nodes, Name, Msg) when is_list(Nodes), is_atom(Name) ->
 %%% ===================================================
 init({Node}) ->
     ok = gen_rpc_helper:set_optimal_process_flags(),
-    {Driver, DriverMod, DriverClosed, DriverError} = gen_rpc_helper:get_transport_driver(),
-    ?log(info, "event=initializing_client driver=~s node=\"~s\"", [Driver, Node]),
-    case DriverMod:connect(Node) of
+    {Driver, Port} = gen_rpc_helper:get_client_config_per_node(Node),
+    {DriverMod, DriverClosed, DriverError} = gen_rpc_helper:get_client_driver_options(Driver),
+    ?log(info, "event=initializing_client driver=~s node=\"~s\" port=~B", [Driver, Node, Port]),
+    case DriverMod:connect(Node, Port) of
         {ok, Socket} ->
             case DriverMod:authenticate_server(Socket) of
                 ok ->
@@ -257,7 +258,7 @@ handle_call({{call,_M,_F,_A} = PacketTuple, SendTO}, Caller, #state{socket=Socke
     case DriverMod:send(Socket, Packet) of
         {error, Reason} ->
             ?log(error, "message=call event=transmission_failed driver=~s socket=\"~s\" caller=\"~p\" reason=\"~p\"",
-                             [Driver, gen_rpc_helper:socket_to_string(Socket), Caller, Reason]),
+                 [Driver, gen_rpc_helper:socket_to_string(Socket), Caller, Reason]),
             {stop, Reason, Reason, State};
         ok ->
             ?log(debug, "message=call event=transmission_succeeded driver=~s socket=\"~s\" caller=\"~p\"",
@@ -270,7 +271,7 @@ handle_call({{call,_M,_F,_A} = PacketTuple, SendTO}, Caller, #state{socket=Socke
 %% Catch-all for calls - die if we get a message we don't expect
 handle_call(Msg, _Caller, #state{socket=Socket, driver=Driver} = State) ->
     ?log(error, "event=uknown_call_received driver=~s socket=\"~s\" message=\"~p\" action=stopping",
-                     [Driver, gen_rpc_helper:socket_to_string(Socket), Msg]),
+         [Driver, gen_rpc_helper:socket_to_string(Socket), Msg]),
     {stop, {unknown_call, Msg}, {unknown_call, Msg}, State}.
 
 %% This is the actual CAST handler for CAST
@@ -294,11 +295,11 @@ handle_cast({{async_call,_M,_F,_A} = PacketTuple, Caller, Ref}, #state{socket=So
     case DriverMod:send(Socket, Packet) of
         {error, Reason} ->
             ?log(error, "message=async_call event=transmission_failed driver=~s socket=\"~s\" worker_pid=\"~p\" call_ref=\"~p\" reason=\"~p\"",
-                             [Driver, gen_rpc_helper:socket_to_string(Socket), Caller, Ref, Reason]),
+                 [Driver, gen_rpc_helper:socket_to_string(Socket), Caller, Ref, Reason]),
             {stop, Reason, Reason, State};
         ok ->
             ?log(debug, "message=async_call event=transmission_succeeded driver=~s socket=\"~s\" worker_pid=\"~p\" call_ref=\"~p\"",
-                             [Driver, gen_rpc_helper:socket_to_string(Socket), Caller, Ref]),
+                 [Driver, gen_rpc_helper:socket_to_string(Socket), Caller, Ref]),
             %% We need to enable the socket and perform the call only if the call succeeds
             ok = DriverMod:activate_socket(Socket),
             %% Reply will be handled from the worker
@@ -308,7 +309,7 @@ handle_cast({{async_call,_M,_F,_A} = PacketTuple, Caller, Ref}, #state{socket=So
 %% Catch-all for casts - die if we get a message we don't expect
 handle_cast(Msg, #state{socket=Socket, driver=Driver} = State) ->
     ?log(error, "event=uknown_cast_received driver=~s socket=\"~s\" message=\"~p\" action=stopping",
-                     [Driver, gen_rpc_helper:socket_to_string(Socket), Msg]),
+         [Driver, gen_rpc_helper:socket_to_string(Socket), Msg]),
     {stop, {unknown_cast, Msg}, State}.
 
 %% Handle any TCP packet coming in
@@ -316,19 +317,19 @@ handle_info({Driver,Socket,Data}, #state{socket=Socket, driver=Driver, driver_mo
     _Reply = case erlang:binary_to_term(Data) of
         {call, Caller, Reply} ->
             ?log(debug, "event=call_reply_received driver=~s socket=\"~s\" caller=\"~p\" action=sending_reply",
-                             [Driver, gen_rpc_helper:socket_to_string(Socket), Caller]),
+                 [Driver, gen_rpc_helper:socket_to_string(Socket), Caller]),
             gen_server:reply(Caller, Reply);
         {async_call, {Caller, Ref}, Reply} ->
             ?log(debug, "event=async_call_reply_received driver=~s socket=\"~s\" caller=\"~p\" action=sending_reply",
-                             [Driver, gen_rpc_helper:socket_to_string(Socket), Caller]),
+                 [Driver, gen_rpc_helper:socket_to_string(Socket), Caller]),
             Caller ! {self(), Ref, async_call, Reply};
         {sbcast, {Caller, Ref, Node}, Reply} ->
             ?log(debug, "event=sbcast_reply_received driver=~s socket=\"~s\" caller=\"~p\" reference=\"~p\" action=sending_reply",
-                             [Driver, gen_rpc_helper:socket_to_string(Socket), Caller, Ref]),
+                 [Driver, gen_rpc_helper:socket_to_string(Socket), Caller, Ref]),
             Caller ! {Ref, Node, Reply};
         OtherData ->
             ?log(error, "event=erroneous_reply_received driver=~s socket=\"~s\" data=\"~p\" action=ignoring",
-                             [Driver, gen_rpc_helper:socket_to_string(Socket), OtherData])
+                 [Driver, gen_rpc_helper:socket_to_string(Socket), OtherData])
     end,
     ok = DriverMod:activate_socket(Socket),
     {noreply, State, gen_rpc_helper:get_inactivity_timeout(?MODULE)};

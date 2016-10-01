@@ -9,37 +9,17 @@
 - License: [![GitHub license](https://img.shields.io/badge/license-Apache%202-blue.svg)](https://raw.githubusercontent.com/priestjim/gen_rpc/master/LICENSE)
 - [Erlang Factory 2016 Talk](https://www.youtube.com/watch?feature=player_embedded&v=xiPnLACtNeo)
 
-## Rationale
-
-**TL;DR**: `gen_rpc` uses a mailbox-per-node architecture and `gen_tcp` processes to parallelize data reception from multiple nodes without blocking the VM's distributed port.
-
-The reasons for developing `gen_rpc` became apparent after a lot of trial and error while trying to scale a distributed Erlang infrastructure using the `rpc` library initially and subsequently `erlang:spawn/4` (remote spawn). Both these solutions suffer from very specific issues under a sufficiently high number of requests.
-
-The `rpc` library operates by shipping data over the wire via Distributed Erlang's ports into a registered `gen_server` on the other side called `rex` (Remote EXecution server), which is running as part of the standard distribution. In high traffic scenarios, this allows the inherent problem of running a single `gen_server` server to manifest: mailbox flooding. As the number of nodes participating in a data exchange with the node in question increases, so do the messages that `rex` has to deal with, eventually becoming too much for the process to handle (don't forget this is confined to a single thread).
-
-Enter `erlang:spawn/4` (_remote spawn_ from now on). Remote spawn dynamically spawns processes on a remote node, skipping the single-mailbox restriction that `rex` has. The are various libraries written to leverage that loophole (such as [Rexi](https://github.com/cloudant/rexi)), however there's a catch.
-
-Remote spawn was not designed to ship large amounts of data as part of the call's arguments. Hence, if you want to ship a large binary such as a picture or a transaction log (large can also be small if your network is slow) over remote spawn, sooner or later you'll see this message popping up in your logs if you have subscribed to the system monitor through `erlang:system_monitor/2`:
-
-```erlang
-{monitor,<4685.187.0>,busy_dist_port,#Port<4685.41652>}
-```
-
-This message essentially means that the VM's distributed port pair was busy while the VM was trying to use it for some other task like _Distributed Erlang heartbeat beacons_ or _mnesia synchronization_. This of course wrecks havoc in certain timing expectations these subsystems have and the results can be very problematic: the VM might detect a node as disconnected even though everything is perfectly healthy and `mnesia` might misdetect a network partition.
-
-`gen_rpc` solves both these problems by sharding data coming from different nodes to different processes (hence different mailboxes) and by using a different `gen_tcp` port for different nodes (hence not utilizing the Distributed Erlang ports).
-
-# Build Dependencies
+## Build Dependencies
 
 To build this project you need to have the following:
 
-* **Erlang/OTP** >= 19.0
+* **Erlang/OTP** >= 19.1
 
 * **git** >= 1.7
 
 * **GNU make** >= 3.80
 
-* **rebar3** >= 3.0-beta4
+* **rebar3** >= 3.1
 
 ## Usage
 
@@ -51,11 +31,11 @@ Getting started with `gen_rpc` is easy. First, add the appropriate dependency li
 ]}.
 ```
 
-Or if you're using `hex.pm`:
+Or if you're using `hex.pm`/`rebar3`:
 
 ```erlang
 {deps [
-    {gen_rpc, "1.0.2"}
+    {gen_rpc, "~> 1.5.0"}
 ]}.
 ```
 
@@ -65,7 +45,7 @@ Or if you're using Elixir/Mix:
 def project do
   [
     deps: [
-      {:gen_rpc, "~> 1.0.0"}
+      {:gen_rpc, "~> 1.5.0"}
     ]
   ]
 ```
@@ -93,6 +73,92 @@ Finally, start a couple of nodes to test it out:
 'other_node@1.2.3.4'
 ```
 
+## Application settings
+
+- `tcp_server_port`: The plain TCP port `gen_rpc` will use for incoming connections or `false` if you
+  do not want plain TCP enabled.
+
+- `tcp_client_port`: The plain TCP port `gen_rpc` will use for outgoing connections.
+
+- `ssl_server_port`: The port `gen_rpc` will use for incoming SSL connections or `false` if you do not
+  want SSL enabled.
+
+- `ssl_client_port`: The port `gen_rpc` will use for outgoing SSL connections.
+
+- `ssl_server_options` and `ssl_client_options`: Settings for the `ssl` interface that `gen_rpc` will use to
+  connect to a remote `gen_rpc` server.
+
+- `default_client_driver`: The default driver `gen_rpc` is going to use to connect to remote `gen_rpc` nodes.
+  It should be either `tcp` or `ssl`.
+
+- `client_driver_per_node`: A map of `Node => {Driver, Port}` or `Node => Port` that instructs `gen_rpc` on the `Port`
+  and/or `Driver` to use when connecting to a `Node`.
+
+- `rpc_module_control`: Set it to `blacklist` to define a list of modules that will not be exposed to `gen_rpc` or to `whitelist`
+  to define the list of modules that will be exposed to `gen_rpc`. Set it to `disabled` to disable this feature.
+
+- `rpc_module_list`: The list of modules that are going to be blacklisted or whitelisted.
+
+- `authentication_timeout`: Default timeout for the authentication state of an incoming connection in **milliseconds**.
+  Used to protect against half-open connections in a DoS attack.
+
+- `connect_timeout`: Default timeout for the initial node-to-node connection in **milliseconds**.
+
+- `send_timeout`: Default timeout for the transmission of a request (`call`/`cast` etc.) from the local node to the remote node in **milliseconds**.
+
+- `call_receive_timeout`: Default timeout for the reception of a response in a `call` in **milliseconds**.
+
+- `sbcast_receive_timeout`: Default timeout for the reception of a response in an `sbcast` in **milliseconds**.
+
+- `client_inactivity_timeout`: Inactivity period in **milliseconds** after which a client connection to a node will be closed (and hence have the TCP file descriptor freed).
+
+- `server_inactivity_timeout`: Inactivity period in **milliseconds** after which a server port will be closed (and hence have the TCP file descriptor freed).
+
+- `async_call_inactivity_timeout`: Inactivity period in **milliseconds** after which a pending process holding an `async_call` return value will exit. This is used for process sanitation purposes so please make sure to set it in a sufficiently high number (or `infinity`).
+
+## SSL Configuration
+
+`gen_rpc` supports SSL for inter-node communication. This allows secure communication and execution over insecure channels such as the internet, essentially allowing a **trully globally distributed Erlang/Elixir** setup. `gen_rpc` is very opinionated on how SSL should be configured and the bundled default options include:
+
+- A proper PFS-enabled cipher suite
+
+- Both server and client-based SSL node CN (CommonName) verification
+
+- Secure renegotiation
+
+- TLS 1.1/1.2 enforcement
+
+All of these settings can be found in `include/ssl.hrl` and overriden by redefining the necessary option in `ssl_client_options` and `ssl_server_options`. To actually use SSL support, you'll need to define in both `ssl_client_options` and `ssl_server_options`:
+
+- The public and private keys in PEM format, for the node you're running `gen_rpc` on, using the usual `certfile`, `keyfile` options.
+
+- The public key of the CA that signs the node's key and the public key(s) of CA that `gen_rpc` should trust, defined in `cacertfile`.
+
+- Optionally, a Diffie-Hellman parameter file using the `dhfile` option.
+
+To generate your own self-signed CA and node certificates, numerous articles can be found online such as [https://help.github.com/enterprise/11.10.340/admin/articles/using-self-signed-ssl-certificates/](this).
+
+Usually, the CA that'll be signing your client and server SSL certificates will be the same so a nominal `sys.confg` that includes SSL support for `gen_rpc` will look like:
+
+```erlang
+    {gen_rpc, [
+        {ssl_client_options, [
+            {certfile, "priv/cert.pem"},
+            {keyfile, "priv/cert.key"},
+            {cacertfile, "priv/ca.pem"},
+            {dhfile, "priv/dhparam.pem"}
+        ]},
+        {ssl_server_options, [
+            {certfile, "priv/cert.pem"},
+            {keyfile, "priv/cert.key"},
+            {cacertfile, "priv/ca.pem"},
+            {dhfile, "priv/dhparam.pem"}
+        ]}
+    ]}
+```
+
+For multi-site deployments, a performant setup can be provisioned with edge `gen_rpc` nodes using SSL over the internet and plain TCP for internal data exchange. In that case, non-edge nodes can have `{ssl_server_port, false}` and `{default_client_driver, tcp}` and edge nodes can have their plain TCP port firewalled externally and `{default_client_driver, ssl}`.
+
 ## Build Targets
 
 `gen_rpc` bundles a `Makefile` that makes development straightforward.
@@ -111,7 +177,13 @@ To run the full test suite, the XRef tool and Dialyzer, run:
 
 To build the project and drop in a console while developing, run:
 
-    make shell
+    make shell-master
+
+or
+
+    make shell-slave
+
+If you want to run a "master" and a "slave" `gen_rpc` nodes to run tests.
 
 To clean every build artifact and log, run:
 
@@ -156,37 +228,25 @@ For more information on what the functions below do, run `erl -man rpc`.
 
 `gen_rpc` supports executing RPC calls on remote nodes that are running only specific module versions. To leverage that feature, in place of `Module` in the section above, use `{Module, Version}`. If the remote `module` is not on the version requested a `{badrpc,incompatible]` will be returned.
 
-### Application settings
+## Rationale
 
-- `transport_driver`: The driver to use in order to trasport data between the nodes. Currently, only supports `tcp` for plain TCP connectivity or `ssl` for SSL-based connectivity.
+**TL;DR**: `gen_rpc` uses a mailbox-per-node architecture and `gen_tcp` processes to parallelize data reception from multiple nodes without blocking the VM's distributed port.
 
-- `port`: The port in which the TCP listener service listens for incoming client requests.
+The reasons for developing `gen_rpc` became apparent after a lot of trial and error while trying to scale a distributed Erlang infrastructure using the `rpc` library initially and subsequently `erlang:spawn/4` (remote spawn). Both these solutions suffer from very specific issues under a sufficiently high number of requests.
 
-- `port_per_node`: A map with the nodes that run on alternative `port` configuration and the port
-  they have configured `gen_rpc` to listen to. Useful when running multiple nodes on the same system and you get port clashes.
+The `rpc` library operates by shipping data over the wire via Distributed Erlang's ports into a registered `gen_server` on the other side called `rex` (Remote EXecution server), which is running as part of the standard distribution. In high traffic scenarios, this allows the inherent problem of running a single `gen_server` server to manifest: mailbox flooding. As the number of nodes participating in a data exchange with the node in question increases, so do the messages that `rex` has to deal with, eventually becoming too much for the process to handle (don't forget this is confined to a single thread).
 
-- `rpc_module_control`: Set it to `blacklist` to define a list of modules that will not be exposed to `gen_rpc` or to `whitelist`
-  to define the list of modules that will be exposed to `gen_rpc`. Set it to `undefined` to disable this feature.
+Enter `erlang:spawn/4` (_remote spawn_ from now on). Remote spawn dynamically spawns processes on a remote node, skipping the single-mailbox restriction that `rex` has. The are various libraries written to leverage that loophole (such as [Rexi](https://github.com/cloudant/rexi)), however there's a catch.
 
-- `rpc_module_list`: The list of modules that are going to be blacklisted or whitelisted.
+Remote spawn was not designed to ship large amounts of data as part of the call's arguments. Hence, if you want to ship a large binary such as a picture or a transaction log (large can also be small if your network is slow) over remote spawn, sooner or later you'll see this message popping up in your logs if you have subscribed to the system monitor through `erlang:system_monitor/2`:
 
-- `connect_timeout`: Default timeout for the initial node-to-node connection in **milliseconds**.
+```erlang
+{monitor,<4685.187.0>,busy_dist_port,#Port<4685.41652>}
+```
 
-- `send_timeout`: Default timeout for the transmission of a request (`call`/`cast` etc.) from the local node to the remote node in **milliseconds**.
+This message essentially means that the VM's distributed port pair was busy while the VM was trying to use it for some other task like _Distributed Erlang heartbeat beacons_ or _mnesia synchronization_. This of course wrecks havoc in certain timing expectations these subsystems have and the results can be very problematic: the VM might detect a node as disconnected even though everything is perfectly healthy and `mnesia` might misdetect a network partition.
 
-- `call_receive_timeout`: Default timeout for the reception of a response in a `call` in **milliseconds**.
-
-- `sbcast_receive_timeout`: Default timeout for the reception of a response in an `sbcast` in **milliseconds**.
-
-- `client_inactivity_timeout`: Inactivity period in **milliseconds** after which a client connection to a node will be closed (and hence have the TCP file descriptor freed).
-
-- `server_inactivity_timeout`: Inactivity period in **milliseconds** after which a server port will be closed (and hence have the TCP file descriptor freed).
-
-- `async_call_inactivity_timeout`: Inactivity period in **milliseconds** after which a pending process holding an `async_call` return value will exit. This is used for process sanitation purposes so please make sure to set it in a sufficiently high number (or `infinity`).
-
-### SSL Configuration
-
-
+`gen_rpc` solves both these problems by sharding data coming from different nodes to different processes (hence different mailboxes) and by using a different `gen_tcp` port for different nodes (hence not utilizing the Distributed Erlang ports).
 
 ## Architecture
 
@@ -202,7 +262,7 @@ In order to achieve the mailbox-per-node feature, `gen_rpc` uses a very specific
 
 - The `gen_rpc server` server will ask the `acceptor` supervisor to launch a new `acceptor` process and hands it off the new socket connection.
 
-- The `acceptor` takes over the new socket and authenticates the `client` with the current Erlang cookie.
+- The `acceptor` takes over the new socket and authenticates the `client` with the current Erlang cookie and any extra protocol-level authentication supported by the selected driver.
 
 - The `client` finally encodes the request (`call`, `cast` etc.) along with some metadata (the caller's PID and a reference) and sends it over the TCP channel. In case of an `async call`, the `client` also launches a process that will be responsible for handing the server's reply to the requester.
 

@@ -9,6 +9,8 @@
 
 %%% CT Macros
 -include_lib("test/include/ct.hrl").
+%%% TCP settings
+-include("tcp.hrl").
 
 %%% No need to export anything, everything is automatically exported
 %%% as part of the test profile
@@ -30,6 +32,12 @@ init_per_suite(Config) ->
 
 end_per_suite(_Config) ->
     ok.
+
+init_per_testcase(authentication_timeout, Config) ->
+    ok = gen_rpc_test_helper:restart_application(),
+    ok = gen_rpc_test_helper:set_application_environment(),
+    ok = application:set_env(?APP, authentication_timeout, 500),
+    Config;
 
 init_per_testcase(client_inactivity_timeout, Config) ->
     ok = gen_rpc_test_helper:restart_application(),
@@ -71,6 +79,10 @@ init_per_testcase(rpc_module_blacklist, Config) ->
 init_per_testcase(_OtherTest, Config) ->
     Config.
 
+end_per_testcase(authentication_timeout, Config) ->
+    ok = application:set_env(?APP, authentication_timeout, 5000),
+    Config;
+
 end_per_testcase(client_inactivity_timeout, Config) ->
     ok = application:set_env(?APP, client_inactivity_timeout, infinity),
     Config;
@@ -101,10 +113,10 @@ end_per_testcase(_OtherTest, Config) ->
 %%% ===================================================
 %% Test supervisor's status
 supervisor_black_box(_Config) ->
-    true = erlang:is_process_alive(whereis(gen_rpc_acceptor_sup)),
-    true = erlang:is_process_alive(whereis(gen_rpc_client_sup)),
-    true = erlang:is_process_alive(whereis(gen_rpc_server)),
-    true = erlang:is_process_alive(whereis(gen_rpc_dispatcher)),
+    true = erlang:is_process_alive(erlang:whereis(gen_rpc_acceptor_sup)),
+    true = erlang:is_process_alive(erlang:whereis(gen_rpc_client_sup)),
+    true = erlang:is_process_alive(erlang:whereis(gen_rpc_server)),
+    true = erlang:is_process_alive(erlang:whereis(gen_rpc_dispatcher)),
     ok.
 
 %% Test main functions
@@ -157,6 +169,19 @@ interleaved_call(_Config) ->
     Pid2 = erlang:spawn(?MODULE, interleaved_call_proc, [self(), 2, 10]),
     Pid3 = erlang:spawn(?MODULE, interleaved_call_proc, [self(), 3, infinity]),
     ok = interleaved_call_loop(Pid1, Pid2, Pid3, 0),
+    ok.
+
+authentication_timeout(_Config) ->
+    Port = gen_rpc_helper:get_port_per_node(node()),
+    [] = supervisor:which_children(gen_rpc_acceptor_sup),
+    {ok, _Sock} = gen_tcp:connect("127.0.0.1", Port, ?TCP_DEFAULT_OPTS),
+    %% Give the server some time to launch the acceptor
+    ok = timer:sleep(50),
+    %% The acceptor has been launched
+    [_Master] = supervisor:which_children(gen_rpc_acceptor_sup),
+    ok = timer:sleep(600),
+    %% The acceptor should have shut down
+    [] = supervisor:which_children(gen_rpc_acceptor_sup),
     ok.
 
 cast(_Config) ->

@@ -29,7 +29,7 @@
 .PHONY: all test dialyzer xref spec dist coveralls
 
 # Run targets
-.PHONY: shell
+.PHONY: shell shell-master shell-slave
 
 # Misc targets
 .PHONY: clean testclean distclean tags rebar

@@ -22,7 +22,7 @@
 -include("guards.hrl").
 
 %%% Public API
--export([connect/1,
+-export([connect/2,
         listen/1,
         accept/1,
         get_peer/1,
@@ -39,10 +39,9 @@
 %%% Public API
 %%% ===================================================
 %% Connect to a node
--spec connect(atom()) -> {ok, port()} | {error, term()}.
-connect(Node) when is_atom(Node) ->
+-spec connect(atom(), inet:port_number()) -> {ok, port()} | {error, term()}.
+connect(Node, Port) when is_atom(Node) ->
     Host = gen_rpc_helper:host_from_node(Node),
-    Port = gen_rpc_helper:get_port_per_node(Node),
     ConnTO = gen_rpc_helper:get_connect_timeout(),
     case gen_tcp:connect(Host, Port, ?TCP_DEFAULT_OPTS, ConnTO) of
         {ok, Socket} ->
@@ -163,9 +162,20 @@ authenticate_client(Socket, Peer, Data) ->
             {error, {badtcp,corrupt_data}}
     end.
 
+%% Taken from prim_inet.  We are merely copying some socket options from the
+%% listening socket to the new acceptor socket.
 -spec copy_sock_opts(port(), port()) -> ok | {error, any()}.
-copy_sock_opts(ListSock, AccSock) ->
-    gen_rpc_helper:copy_sock_opts(ListSock, AccSock, ?ACCEPTOR_COPY_TCP_OPTS).
+copy_sock_opts(ListSock, AccSock) when is_port(ListSock), is_port(AccSock) ->
+    true = inet_db:register_socket(AccSock, inet_tcp),
+    case prim_inet:getopts(ListSock, ?ACCEPTOR_COPY_TCP_OPTS) of
+        {ok, SockOpts} ->
+            case prim_inet:setopts(AccSock, SockOpts) of
+                ok -> ok;
+                Error -> Error
+            end;
+        Error ->
+            Error
+        end.
 
 -spec get_peer(port()) -> {inet:ip4_address(), inet:port_number()}.
 get_peer(Socket) when is_port(Socket) ->

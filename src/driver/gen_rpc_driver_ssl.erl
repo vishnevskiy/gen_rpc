@@ -23,7 +23,7 @@
 -include("guards.hrl").
 
 %%% Public API
--export([connect/1,
+-export([connect/2,
         listen/1,
         accept/1,
         get_peer/1,
@@ -40,10 +40,9 @@
 %%% Public API
 %%% ===================================================
 %% Connect to a node
--spec connect(atom()) -> {ok, ssl:sslsocket()} | {error, term()}.
-connect(Node) when is_atom(Node) ->
+-spec connect(atom(), inet:port_number()) -> {ok, ssl:sslsocket()} | {error, term()}.
+connect(Node, Port) when is_atom(Node) ->
     Host = gen_rpc_helper:host_from_node(Node),
-    Port = gen_rpc_helper:get_port_per_node(Node),
     ConnTO = gen_rpc_helper:get_connect_timeout(),
     SslOpts = merge_ssl_options(client, Node),
     case ssl:connect(Host, Port, SslOpts, ConnTO) of

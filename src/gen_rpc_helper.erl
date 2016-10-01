@@ -14,16 +14,16 @@
 -export([peer_to_string/1,
         socket_to_string/1,
         host_from_node/1,
-        copy_sock_opts/3,
         set_optimal_process_flags/0,
         make_process_name/2,
         extract_node_name/1,
         merge_sockopt_lists/2,
-        get_transport_driver/0,
-        get_transport_driver_per_node/1,
-        get_port_per_node/1,
+        is_driver_enabled/1,
+        get_server_driver_options/1,
+        get_client_config_per_node/1,
         get_connect_timeout/0,
         get_send_timeout/1,
+        get_rpc_module_control/0,
         get_authentication_timeout/0,
         get_call_receive_timeout/1,
         get_sbcast_receive_timeout/0,
@@ -74,21 +74,6 @@ set_optimal_process_flags() ->
     _ = erlang:process_flag(message_queue_data, off_heap),
     ok.
 
-%% Taken from prim_inet.  We are merely copying some socket options from the
-%% listening socket to the new acceptor socket.
--spec copy_sock_opts(port(), port(), list()) -> ok | {error, any()}.
-copy_sock_opts(SourceSock, DestSock, Options) when is_port(SourceSock), is_port(DestSock), is_list(Options) ->
-    true = inet_db:register_socket(DestSock, inet_tcp),
-    case prim_inet:getopts(SourceSock, Options) of
-        {ok, SockOpts} ->
-            case prim_inet:setopts(DestSock, SockOpts) of
-                ok -> ok;
-                Error -> Error
-            end;
-        Error ->
-            Error
-        end.
-
 %% Return an atom to identify gen_rpc processes
 -spec make_process_name(list(), {inet:ip4_address(), inet:port_number()} | atom()) -> atom().
 make_process_name("client", Node) when is_atom(Node) ->
@@ -96,6 +81,10 @@ make_process_name("client", Node) when is_atom(Node) ->
     %% process name in order to avoid calling costly functions
     NodeStr = erlang:atom_to_list(Node),
     list_to_atom(lists:flatten(["gen_rpc.client.", NodeStr]));
+
+make_process_name("server", Driver) when is_atom(Driver) ->
+    DriverStr = erlang:atom_to_list(Driver),
+    list_to_atom(lists:flatten(["gen_rpc_server_", DriverStr]));
 
 make_process_name(Prefix, Peer) when is_list(Prefix), is_tuple(Peer) ->
     list_to_atom(lists:flatten(["gen_rpc.", Prefix, ".", peer_to_string(Peer)])).
@@ -116,35 +105,52 @@ merge_sockopt_lists(List1, List2) ->
     SList2 = lists:usort(fun hybrid_proplist_compare/2, List2),
     lists:umerge(fun hybrid_proplist_compare/2, SList1, SList2).
 
-%% Return the connection mode and helper module
--spec get_transport_driver() -> tuple().
-get_transport_driver() ->
-    {ok, Driver} = application:get_env(?APP, transport_driver),
-    get_transport_driver_data_tuple(Driver).
-
--spec get_transport_driver_per_node(atom()) -> tuple().
-get_transport_driver_per_node(Node) ->
-    {ok, Nodes} = application:get_env(?APP, transport_driver_per_node),
-    case maps:find(Node, Nodes) of
-        error ->
-            get_transport_driver();
-        {ok, Driver} ->
-            get_transport_driver_data_tuple(Driver)
+-spec is_driver_enabled(atom()) -> boolean().
+is_driver_enabled(Driver) when is_atom(Driver) ->
+    DriverStr = erlang:atom_to_list(Driver),
+    Setting = list_to_atom(lists:flatten([DriverStr, "_server_port"])),
+    case application:get_env(?APP, Setting) of
+        {ok, false} ->
+            false;
+        {ok, _Port} ->
+            true
     end.
 
-%% Retrieves the specific TCP server port
--spec get_port_per_node(atom()) -> inet:port_number().
-get_port_per_node(Node) ->
-    {ok, Ports} = application:get_env(?APP, port_per_node),
-    case maps:find(Node, Ports) of
+-spec get_server_driver_options(atom()) -> tuple().
+get_server_driver_options(Driver) when is_atom(Driver) ->
+    DriverStr = erlang:atom_to_list(Driver),
+    DriverMod = list_to_atom(lists:flatten(["gen_rpc_driver_", DriverStr])),
+    ClosedMsg = list_to_atom(lists:flatten([DriverStr, "_closed"])),
+    ErrorMsg = list_to_atom(lists:flatten([DriverStr, "_error"])),
+    PortSetting = list_to_atom(lists:flatten([DriverStr, "_server_port"])),
+    {ok, DriverPort} = application:get_env(?APP, PortSetting),
+    {DriverMod, DriverPort, ClosedMsg, ErrorMsg}.
+
+-spec get_client_driver_options(atom()) -> tuple().
+get_client_driver_options(Driver) when is_atom(Driver) ->
+    DriverStr = erlang:atom_to_list(Driver),
+    DriverMod = list_to_atom(lists:flatten(["gen_rpc_driver_", DriverStr])),
+    ClosedMsg = list_to_atom(lists:flatten([DriverStr, "_closed"])),
+    ErrorMsg = list_to_atom(lists:flatten([DriverStr, "_error"])),
+    {DriverMod, ClosedMsg, ErrorMsg}.
+
+-spec get_client_config_per_node(atom()) -> {atom(), inet:port_number()}.
+get_client_config_per_node(Node) when is_atom(Node) ->
+    {ok, NodeConfig} = application:get_env(?APP, client_config_per_node),
+    case maps:find(Node, NodeConfig) of
         error ->
-            {ok, Port} = application:get_env(?APP, port),
-            Port;
-        {ok, Port} ->
-            Port
+            {ok, Driver} = application:get_env(?APP, default_client_driver),
+            DriverStr = erlang:atom_to_list(Driver),
+            PortSetting = list_to_atom(lists:flatten([DriverStr, "_client_port"])),
+            {ok, Port} = application:get_env(?APP, PortSetting),
+            {Driver, Port};
+        {ok, Port} when is_integer(Port) ->
+            {ok, Driver} = application:get_env(?APP, default_client_driver),
+            {Driver, Port};
+        {ok, {Driver,Port}} ->
+            {Driver, Port}
     end.
 
-%% Retrieves the default connect timeout
 -spec get_connect_timeout() -> timeout().
 get_connect_timeout() ->
     {ok, ConnTO} = application:get_env(?APP, connect_timeout),
@@ -159,7 +165,18 @@ get_call_receive_timeout(undefined) ->
 get_call_receive_timeout(Else) ->
     Else.
 
+-spec get_rpc_module_control() -> {atom(), atom() | sets:set()}.
+get_rpc_module_control() ->
+    case application:get_env(?APP, rpc_module_control) of
+        {ok, disabled} ->
+            {disabled, disabled};
+        {ok, Type} when Type =:= whitelist; Type =:= blacklist ->
+            {ok, List} = application:get_env(?APP, rpc_module_list),
+            {Type, sets:from_list(List)}
+    end.
+
 %% Retrieves the default authentication timeout
+-spec get_authentication_timeout() -> timeout().
 get_authentication_timeout() ->
     {ok, AuthTO} = application:get_env(?APP, authentication_timeout),
     AuthTO.
@@ -202,13 +219,6 @@ get_async_call_inactivity_timeout() ->
 %%% ===================================================
 %%% Private functions
 %%% ===================================================
-%% Returns the proper transport driver tuple
-get_transport_driver_data_tuple(tcp) ->
-    {tcp, gen_rpc_driver_tcp, tcp_closed, tcp_error};
-
-get_transport_driver_data_tuple(ssl) ->
-    {ssl, gen_rpc_driver_ssl, ssl_closed, ssl_error}.
-
 hybrid_proplist_compare({K1,_V1}, {K2,_V2}) ->
     K1 =< K2;
 
