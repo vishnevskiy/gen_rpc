@@ -136,7 +136,7 @@ All of these settings can be found in `include/ssl.hrl` and overriden by redefin
 
 - Optionally, a Diffie-Hellman parameter file using the `dhfile` option.
 
-To generate your own self-signed CA and node certificates, numerous articles can be found online such as [https://help.github.com/enterprise/11.10.340/admin/articles/using-self-signed-ssl-certificates/](this).
+To generate your own self-signed CA and node certificates, numerous articles can be found online such as [this](https://help.github.com/enterprise/11.10.340/admin/articles/using-self-signed-ssl-certificates/).
 
 Usually, the CA that'll be signing your client and server SSL certificates will be the same so a nominal `sys.confg` that includes SSL support for `gen_rpc` will look like:
 
